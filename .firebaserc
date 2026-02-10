@@ -1,7 +1,8 @@
 {
   "projects": {
-    "default": "fight-club-attendance-dev"
+    "default": "fight-club-attendance-dev",
+    "dev": "fight-club-attendance-dev"
   },
-  "targets": {}
+  "targets": {},
+  "etags": {}
 }
-

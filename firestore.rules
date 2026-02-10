@@ -22,7 +22,9 @@ service cloud.firestore {
     }
 
     match /members/{memberId} {
-      allow read: if isCoachOrAdmin();
+      // v1 kiosk lookup requires member search without staff sign-in.
+      // Tighten later with App Check + callable boundary if needed.
+      allow read: if true;
       allow create, update, delete: if isAdmin();
     }
 

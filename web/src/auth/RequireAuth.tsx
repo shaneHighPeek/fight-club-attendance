@@ -23,7 +23,18 @@ export function RequireAuth({ allowedRoles }: RequireAuthProps) {
   }
 
   if (allowedRoles && (!role || !allowedRoles.includes(role))) {
-    return <Navigate to="/admin" replace />;
+    return (
+      <div className="page">
+        <h1>Access Pending</h1>
+        <p>
+          Your account is signed in, but does not have a staff role yet.
+        </p>
+        <p>
+          Ask an admin to assign one of: <code>admin</code>, <code>manager</code>,
+          or <code>coach</code>.
+        </p>
+      </div>
+    );
   }
 
   return <Outlet />;

@@ -30,6 +30,7 @@ windsurf-project/
 ## Key Docs
 
 - `docs/implementation-plan-v1.md`
+- `docs/checkpoint-2026-02-10.md`
 - `docs/firebase-setup-checklist.md`
 - `docs/data-model.md`
 - `docs/integration-spec.md`

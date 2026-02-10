@@ -2,11 +2,11 @@
 
 ## Phase 1: Core Kiosk Check-in (MVP)
 **Goal**: Basic member check-in functionality
-- [ ] Set up Firebase project and hosting
-- [ ] Implement member search by phone/last name
-- [ ] Create check-in logging system
-- [ ] Design and implement basic kiosk UI
-- [ ] Set up basic security rules
+- [x] Set up Firebase project and hosting baseline
+- [x] Implement member search by phone/last name (Firestore read + selection flow)
+- [ ] Create check-in logging system (in progress next)
+- [x] Design and implement basic kiosk UI shell
+- [x] Set up basic security rules (deployed)
 
 **Success Criteria**:
 - Members can check in with phone/last name
@@ -30,9 +30,9 @@
 
 ## Phase 3: Admin Portal
 **Goal**: Basic admin functionality
-- [ ] Admin authentication
-- [ ] Attendance dashboard
-- [ ] Member management
+- [x] Admin authentication baseline (email/password + route guard)
+- [x] Attendance dashboard shell
+- [x] Member management shell
 - [ ] Basic reporting
 - [ ] Export functionality
 
@@ -83,3 +83,12 @@
 - CRM API documentation
 - Legal review of waiver process
 - Kiosk hardware decisions
+
+## Status Snapshot (February 10, 2026)
+
+- Firebase project `fight-club-attendance-dev` is created and connected.
+- Firestore database is created and Firestore rules/indexes are deployed.
+- Web app is connected to Firebase via `web/.env.local`.
+- Admin login works for bootstrap admin email.
+- Kiosk lookup works against Firestore members.
+- Remaining immediate Phase 1 task: implement the check-in write transaction (`attendanceLogs` + member counters).

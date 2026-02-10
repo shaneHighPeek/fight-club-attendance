@@ -79,9 +79,9 @@ Note:
 
 ## Phased Build Sequence
 
-1. Build route shell + auth shell.
-2. Implement member lookup and family selection.
-3. Implement check-in write transaction.
+1. Build route shell + auth shell. (Done)
+2. Implement member lookup and family selection. (Done)
+3. Implement check-in write transaction. (Next in progress)
 4. Implement waiver creation + casual check-in.
 5. Implement lock/unlock flow via PIN hash compare.
 6. Implement webhook delivery worker and retries.
@@ -100,3 +100,12 @@ Note:
 4. Kiosk write hardening approach:
    - Recommended: callable/function-gated writes for attendance + waiver creates.
    - Why: better validation, abuse protection, and auditability than direct public writes.
+
+## Current Implementation Notes (February 10, 2026)
+
+- Firebase auth sign-in method enabled: Email/Password.
+- Firestore collection `members` tested with live lookup.
+- Kiosk search now uses `lastNameLower` for case-insensitive prefix lookup.
+- Temporary bootstrap admin access is enabled through `VITE_BOOTSTRAP_ADMIN_EMAIL` in `web/.env.local`.
+- Current Firestore rules allow public read on `members` to support kiosk lookup in v1 baseline.
+- Next coding target: check-in write path from `ConfirmCheckInPage` into `attendanceLogs`, and member `lastCheckIn/totalCheckIns` updates.
