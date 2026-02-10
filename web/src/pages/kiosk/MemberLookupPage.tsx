@@ -105,9 +105,9 @@ export function MemberLookupPage() {
   }
 
   return (
-    <main className="page">
+    <main className="page page-kiosk">
       <h1>Member Lookup</h1>
-      <p>Search by last name or phone.</p>
+      <p>Type your family name or phone number to find your profile.</p>
       <form className="panel" onSubmit={handleSearch}>
         <label>
           Last name or phone

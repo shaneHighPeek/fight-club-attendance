@@ -4,7 +4,7 @@
 **Goal**: Basic member check-in functionality
 - [x] Set up Firebase project and hosting baseline
 - [x] Implement member search by phone/last name (Firestore read + selection flow)
-- [ ] Create check-in logging system (in progress next)
+- [x] Create check-in logging system
 - [x] Design and implement basic kiosk UI shell
 - [x] Set up basic security rules (deployed)
 
@@ -33,13 +33,13 @@
 - [x] Admin authentication baseline (email/password + route guard)
 - [x] Attendance dashboard shell
 - [x] Member management shell
-- [ ] Basic reporting
-- [ ] Export functionality
+- [x] Basic reporting (attendance table + search + today filter)
+- [x] Google Sheets reporting sync for owner access (replace CSV-first approach)
 
 **Success Criteria**:
 - Staff can view attendance records
 - Basic filtering and search functionality
-- Export to CSV/Excel
+- Owner can review attendance in Google Sheets without direct DB access
 - Role-based access control
 
 ## Phase 4: Webhook Integration
@@ -91,4 +91,9 @@
 - Web app is connected to Firebase via `web/.env.local`.
 - Admin login works for bootstrap admin email.
 - Kiosk lookup works against Firestore members.
-- Remaining immediate Phase 1 task: implement the check-in write transaction (`attendanceLogs` + member counters).
+- Check-in write transaction is implemented (`attendanceLogs` + member counters).
+- Check-in writes now include `attendanceLevel` (sessions at current belt+stripe) and per-rank counters on member docs.
+- Kiosk success page now auto-returns to home after ~2 seconds.
+- Admin attendance page reads live `attendanceLogs` with table formatting, today-only filter, and member search.
+- Google Sheets auto-sync is deployed for attendance rows:
+  `Name | Date | membershipType | belt | stripes | attendanceLevel`.

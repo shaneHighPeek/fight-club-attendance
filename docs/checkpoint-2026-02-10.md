@@ -11,11 +11,21 @@
 - Admin route access works using bootstrap email fallback (`VITE_BOOTSTRAP_ADMIN_EMAIL`).
 - Kiosk member lookup is live against Firestore `members`.
 - Case-insensitive last-name search works via `lastNameLower`.
+- Confirm check-in writes to Firestore:
+  - `attendanceLogs` create
+  - `members.lastCheckIn`, `members.totalCheckIns` update
+  - `members.rankAttendance.{belt}_{stripes}` increment
+  - `attendanceLogs.attendanceLevel` write
+- Kiosk success page auto-returns to home after ~2 seconds.
+- Admin attendance page reads live logs with:
+  - table view
+  - today-only filter
+  - member search
+- Google Sheets sync is live from `attendanceLogs` create trigger.
+  - Row format: `Name | Date | membershipType | belt | stripes | attendanceLevel`
 
 ## What Is Not Done Yet
 
-- Confirm check-in button does not yet write attendance logs.
-- Member counters (`lastCheckIn`, `totalCheckIns`) are not updated yet.
 - Casual waiver flow still scaffold-only.
 - PIN unlock and audit events are not implemented yet.
 - Webhook delivery worker is not implemented yet.
@@ -23,6 +33,7 @@
 ## Current Temporary/Dev Exceptions
 
 - `firestore.rules` currently allows public read on `members` for kiosk search.
+- `firestore.rules` currently allows signed-in reads on `attendanceLogs` in dev.
 - Bootstrap admin email override is enabled in app code.
   - Source: `web/src/auth/AuthContext.tsx`
   - Env var: `VITE_BOOTSTRAP_ADMIN_EMAIL` in `web/.env.local`
@@ -37,10 +48,10 @@ These are acceptable for current dev progress, but should be tightened before pr
    - Kiosk: `http://localhost:5173/kiosk`
    - Admin: `http://localhost:5173/admin`
 3. Implement next:
-   - check-in write transaction in `web/src/pages/kiosk/ConfirmCheckInPage.tsx`
-   - Firestore write to `attendanceLogs`
-   - Firestore update to `members/{id}` counters/timestamp
+   - implement real casual waiver form writes in `web/src/pages/kiosk/CasualWaiverPage.tsx`
+   - create `waivers` documents and casual attendance logs
+   - tighten kiosk write path (App Check / callable boundary) for production hardening
 
 ## Suggested Next Commit Message
 
-`docs: add checkpoint and update roadmap after firebase + lookup integration`
+`docs: refresh checkpoint after attendance + sheets integration`

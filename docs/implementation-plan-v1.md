@@ -39,7 +39,9 @@ Out of scope for this first implementation pass:
    - Reads from `members` by `lastName` or `phone`
 2. Check-in:
    - Create `attendanceLogs/{id}` with `memberRankAtCheckIn` snapshot
+   - Write `attendanceLogs/{id}.attendanceLevel` (sessions at current belt+stripe)
    - Update `members/{id}.lastCheckIn` and `members/{id}.totalCheckIns`
+   - Increment `members/{id}.rankAttendance.{belt}_{stripes}`
 3. Casual visitor:
    - Create `waivers/{id}` when no active waiver exists
    - Create `attendanceLogs/{id}` (`type = casual`)
@@ -68,9 +70,13 @@ Note:
 - Writes or requests enqueue of a normalized `webhookEvents` record.
 
 ### Cloud Functions
-- `enqueueWebhookEvent` (implemented scaffold):
+- `enqueueWebhookEvent` (implemented baseline):
   - Validates basic payload shape
   - Stores pending event
+- `syncAttendanceToGoogleSheet` (implemented):
+  - Triggered on `attendanceLogs/{id}` create
+  - Appends row to Google Sheet
+  - Stores sync status/error on attendance log
 - Delivery worker (next phase):
   - Pulls pending events
   - Sends POST to HighPeekPro inbound URL
@@ -81,8 +87,8 @@ Note:
 
 1. Build route shell + auth shell. (Done)
 2. Implement member lookup and family selection. (Done)
-3. Implement check-in write transaction. (Next in progress)
-4. Implement waiver creation + casual check-in.
+3. Implement check-in write transaction. (Done)
+4. Implement waiver creation + casual check-in. (Next)
 5. Implement lock/unlock flow via PIN hash compare.
 6. Implement webhook delivery worker and retries.
 7. Harden rules + App Check + audit logs.
@@ -108,4 +114,10 @@ Note:
 - Kiosk search now uses `lastNameLower` for case-insensitive prefix lookup.
 - Temporary bootstrap admin access is enabled through `VITE_BOOTSTRAP_ADMIN_EMAIL` in `web/.env.local`.
 - Current Firestore rules allow public read on `members` to support kiosk lookup in v1 baseline.
-- Next coding target: check-in write path from `ConfirmCheckInPage` into `attendanceLogs`, and member `lastCheckIn/totalCheckIns` updates.
+- Attendance check-in path is live from `ConfirmCheckInPage` with:
+  - attendance log create
+  - member counters/timestamps update
+  - `attendanceLevel` calculation at current rank
+- Admin attendance view is live with table layout + today/search filters.
+- Google Sheets sync for attendance rows is deployed and env-configured.
+- Next coding target: implement full casual waiver + casual attendance writes.

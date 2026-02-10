@@ -28,7 +28,7 @@ export function AdminLoginPage() {
   }
 
   return (
-    <main className="page">
+    <main className="page page-admin">
       <h1>Admin Login</h1>
       <form className="panel" onSubmit={handleSubmit}>
         <label>

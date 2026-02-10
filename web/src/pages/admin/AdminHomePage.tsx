@@ -8,7 +8,7 @@ export function AdminHomePage() {
   const { role, user } = useAuth();
 
   return (
-    <main className="page">
+    <main className="page page-admin">
       <h1>Admin Dashboard</h1>
       <p>Signed in as {user?.email ?? 'unknown'} ({role ?? 'no role'})</p>
       <div className="actions">

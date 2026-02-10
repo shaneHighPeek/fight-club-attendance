@@ -14,7 +14,7 @@ export function MemberSelectPage() {
 
   if (!results.length) {
     return (
-      <main className="page">
+      <main className="page page-kiosk">
         <h1>Select Member</h1>
         <p>No matches loaded. Start from member lookup.</p>
         <Link to="/kiosk/member-lookup">Back to Lookup</Link>
@@ -23,7 +23,7 @@ export function MemberSelectPage() {
   }
 
   return (
-    <main className="page">
+    <main className="page page-kiosk">
       <h1>Select Member</h1>
       <p>Choose the correct student.</p>
       <div className="panel">

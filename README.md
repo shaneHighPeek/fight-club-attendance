@@ -38,5 +38,35 @@ windsurf-project/
 
 ## Notes
 
-- The project currently has baseline scaffolding and documentation-aligned config.
-- Business logic for check-in, waiver flow, and webhook delivery worker is not fully implemented yet.
+- Kiosk member check-in flow is implemented and writing live attendance logs.
+- Admin attendance view is implemented (table + search + today filter).
+- Google Sheets sync is implemented for new attendance records.
+- Casual waiver flow and webhook delivery worker remain pending.
+
+## Google Sheets Attendance Sync
+
+Attendance logs can be mirrored into Google Sheets through the Cloud Function
+`syncAttendanceToGoogleSheet` (triggered on `attendanceLogs/{logId}` create).
+
+### Required Environment Variables (Functions runtime)
+
+- `GOOGLE_SHEETS_SPREADSHEET_ID` (required)
+- `GOOGLE_SHEETS_TAB_NAME` (optional, defaults to `Attendance`)
+
+### Setup Steps
+
+1. Create/open the target Google Sheet.
+2. Share the sheet with your Firebase Functions service account email:
+   - `{project-id}@appspot.gserviceaccount.com`
+   - Grant `Editor` access.
+3. Set runtime env vars for functions deployment:
+   - `GOOGLE_SHEETS_SPREADSHEET_ID`
+   - `GOOGLE_SHEETS_TAB_NAME` (optional)
+4. Deploy functions:
+   - `firebase deploy --only functions`
+
+### Synced Row Format
+
+Each new attendance log appends one row:
+
+- `Name | Date | membershipType | belt | stripes | attendanceLevel`

@@ -9,6 +9,11 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.role == "admin";
     }
 
+    function isBootstrapAdmin() {
+      // Dev bootstrap alignment with frontend env fallback.
+      return isSignedIn() && request.auth.token.email == "shane@drpresident.com";
+    }
+
     function isManager() {
       return isSignedIn() && request.auth.token.role == "manager";
     }
@@ -17,7 +22,24 @@ service cloud.firestore {
       return isSignedIn() && (
         request.auth.token.role == "coach" ||
         request.auth.token.role == "manager" ||
-        request.auth.token.role == "admin"
+        request.auth.token.role == "admin" ||
+        isBootstrapAdmin()
+      );
+    }
+
+    function isKioskCounterUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        "lastCheckIn",
+        "rankAttendance",
+        "totalCheckIns",
+        "updatedAt"
+      ]) &&
+      request.resource.data.lastCheckIn is timestamp &&
+      request.resource.data.updatedAt is timestamp &&
+      request.resource.data.totalCheckIns is int &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["rankAttendance"]) ||
+        request.resource.data.rankAttendance is map
       );
     }
 
@@ -25,12 +47,13 @@ service cloud.firestore {
       // v1 kiosk lookup requires member search without staff sign-in.
       // Tighten later with App Check + callable boundary if needed.
       allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow create, delete: if isAdmin() || isBootstrapAdmin();
+      allow update: if isAdmin() || isBootstrapAdmin() || isKioskCounterUpdate();
     }
 
     match /attendanceLogs/{logId} {
       allow create: if true;
-      allow read: if isCoachOrAdmin();
+      allow read: if isSignedIn();
       allow update, delete: if false;
     }
 
@@ -47,7 +70,7 @@ service cloud.firestore {
 
     match /settings/{settingId} {
       allow read: if isCoachOrAdmin();
-      allow write: if isAdmin();
+      allow write: if isAdmin() || isBootstrapAdmin();
     }
   }
 }
