@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.role == "admin";
+    }
+
+    function isManager() {
+      return isSignedIn() && request.auth.token.role == "manager";
+    }
+
+    function isCoachOrAdmin() {
+      return isSignedIn() && (
+        request.auth.token.role == "coach" ||
+        request.auth.token.role == "manager" ||
+        request.auth.token.role == "admin"
+      );
+    }
+
+    match /members/{memberId} {
+      allow read: if isCoachOrAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /attendanceLogs/{logId} {
+      allow create: if true;
+      allow read: if isCoachOrAdmin();
+      allow update, delete: if false;
+    }
+
+    match /waivers/{waiverId} {
+      allow create: if true;
+      allow read: if isCoachOrAdmin();
+      allow update, delete: if false;
+    }
+
+    match /webhookEvents/{eventId} {
+      allow read: if isCoachOrAdmin();
+      allow write: if false;
+    }
+
+    match /settings/{settingId} {
+      allow read: if isCoachOrAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}

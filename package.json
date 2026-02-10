@@ -1,0 +1,20 @@
+{
+  "name": "fight-club-attendance",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:web": "npm --prefix web run dev",
+    "build:web": "npm --prefix web run build",
+    "lint:web": "npm --prefix web run lint",
+    "build:functions": "npm --prefix functions run build",
+    "lint:functions": "npm --prefix functions run lint",
+    "build": "npm run build:web && npm run build:functions",
+    "lint": "npm run lint:web && npm run lint:functions",
+    "emulators": "firebase emulators:start",
+    "emulators:web": "firebase emulators:start --only hosting,firestore,functions",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:functions": "firebase deploy --only functions",
+    "deploy": "firebase deploy"
+  }
+}
+
