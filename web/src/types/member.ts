@@ -6,8 +6,11 @@ export interface Member {
   firstName: string;
   lastName: string;
   phone: string;
+  email?: string;
   status: 'active' | 'inactive' | 'suspended';
   membershipType: string;
+  waiverAcceptedAt?: Date | null;
+  waiverDisclaimerVersion?: string;
   rank?: {
     belt: Belt;
     stripes: 0 | 1 | 2 | 3 | 4;

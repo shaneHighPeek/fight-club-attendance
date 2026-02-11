@@ -1,12 +1,56 @@
-import { collection, doc, increment, runTransaction, serverTimestamp } from 'firebase/firestore';
-import { useState } from 'react';
+import { Timestamp, collection, doc, getDoc, increment, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
+import { WAIVER_VALIDITY_DAYS, WAIVER_VERSION } from '../../config/waiver';
 import { db } from '../../services/firebase';
 import type { Member } from '../../types/member';
 
 interface ConfirmState {
   member?: Member;
+}
+
+const COMEBACK_THRESHOLD_DAYS = 21;
+
+interface CheckInCelebrationState {
+  memberName: string;
+  streakWeeks: number;
+  daysAway: number;
+  returningAfterBreak: boolean;
+}
+
+function getIsoWeekId(date: Date) {
+  const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${utcDate.getUTCFullYear()}-${String(weekNo).padStart(2, '0')}`;
+}
+
+function parseIsoWeekId(weekId: string) {
+  const [yearRaw, weekRaw] = weekId.split('-');
+  const year = Number(yearRaw);
+  const week = Number(weekRaw);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) {
+    return null;
+  }
+  return { year, week };
+}
+
+function isConsecutiveIsoWeek(previousWeekId: string, currentWeekId: string) {
+  const previous = parseIsoWeekId(previousWeekId);
+  const current = parseIsoWeekId(currentWeekId);
+  if (!previous || !current) {
+    return false;
+  }
+  if (previous.year === current.year) {
+    return current.week - previous.week === 1;
+  }
+  if (current.year - previous.year !== 1 || current.week !== 1) {
+    return false;
+  }
+  return previous.week >= 52;
 }
 
 export function ConfirmCheckInPage() {
@@ -16,14 +60,55 @@ export function ConfirmCheckInPage() {
   const member = state?.member;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [waiverLoading, setWaiverLoading] = useState(false);
+  const [requiresWaiverAck, setRequiresWaiverAck] = useState(false);
+
+  useEffect(() => {
+    async function loadWaiverStatus() {
+      if (!member) {
+        return;
+      }
+      setWaiverLoading(true);
+      try {
+        const memberSnapshot = await getDoc(doc(db, 'members', member.id));
+        const memberData = memberSnapshot.data() as Record<string, unknown> | undefined;
+        const waiverAcceptedAtRaw = memberData?.waiverAcceptedAt;
+        const waiverVersionRaw = memberData?.waiverDisclaimerVersion;
+        const waiverAcceptedAt =
+          waiverAcceptedAtRaw instanceof Timestamp ? waiverAcceptedAtRaw.toDate() : null;
+        const versionMismatch = waiverVersionRaw !== WAIVER_VERSION;
+
+        if (!waiverAcceptedAt) {
+          setRequiresWaiverAck(true);
+          return;
+        }
+
+        const validUntil = new Date(waiverAcceptedAt);
+        validUntil.setDate(validUntil.getDate() + WAIVER_VALIDITY_DAYS);
+        setRequiresWaiverAck(validUntil.getTime() < Date.now() || versionMismatch);
+      } catch (loadError) {
+        console.error(loadError);
+        setRequiresWaiverAck(true);
+      } finally {
+        setWaiverLoading(false);
+      }
+    }
+
+    void loadWaiverStatus();
+  }, [member]);
 
   async function handleCheckIn() {
     if (!member || isSubmitting) {
       return;
     }
+    if (requiresWaiverAck) {
+      setError('Please complete the waiver and signature before check-in.');
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
+    let celebrationState: CheckInCelebrationState | null = null;
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -52,6 +137,31 @@ export function ConfirmCheckInPage() {
           ? rankAttendance[rankAttendanceKey]
           : 0;
         const attendanceLevel = currentRankAttendance + 1;
+        const now = new Date();
+        const currentWeekId = getIsoWeekId(now);
+        const previousWeekId = typeof memberData.streakLastWeekId === 'string' ? memberData.streakLastWeekId : null;
+        const previousStreak =
+          typeof memberData.streakCurrentWeeks === 'number' ? memberData.streakCurrentWeeks : 0;
+        const previousBest =
+          typeof memberData.streakBestWeeks === 'number' ? memberData.streakBestWeeks : 0;
+        const lastCheckInRaw = memberData.lastCheckIn;
+        const lastCheckInDate = lastCheckInRaw instanceof Timestamp ? lastCheckInRaw.toDate() : null;
+        const daysAway = lastCheckInDate
+          ? Math.floor((now.getTime() - lastCheckInDate.getTime()) / (24 * 60 * 60 * 1000))
+          : 0;
+
+        let streakCurrentWeeks = previousStreak > 0 ? previousStreak : 1;
+        if (!previousWeekId) {
+          streakCurrentWeeks = 1;
+        } else if (previousWeekId === currentWeekId) {
+          streakCurrentWeeks = previousStreak > 0 ? previousStreak : 1;
+        } else if (isConsecutiveIsoWeek(previousWeekId, currentWeekId)) {
+          streakCurrentWeeks = (previousStreak > 0 ? previousStreak : 1) + 1;
+        } else {
+          // Neutral reset after a gap week.
+          streakCurrentWeeks = 1;
+        }
+        const streakBestWeeks = Math.max(previousBest, streakCurrentWeeks);
 
         const attendanceRef = doc(collection(db, 'attendanceLogs'));
         const timestamp = serverTimestamp();
@@ -64,18 +174,38 @@ export function ConfirmCheckInPage() {
           locationId: 'ashmore',
           memberRankAtCheckIn: rankAtCheckIn,
           attendanceLevel,
+          streakWeeksAtCheckIn: streakCurrentWeeks,
+          daysSinceLastCheckIn: daysAway,
+          returningAfterBreak: daysAway >= COMEBACK_THRESHOLD_DAYS,
           createdAt: timestamp,
         });
 
-        transaction.update(memberRef, {
+        const memberUpdate: Record<string, unknown> = {
           lastCheckIn: timestamp,
           totalCheckIns: increment(1),
           [`rankAttendance.${rankAttendanceKey}`]: increment(1),
+          streakCurrentWeeks,
+          streakBestWeeks,
+          streakLastWeekId: currentWeekId,
           updatedAt: timestamp,
-        });
+        };
+
+        if (requiresWaiverAck) {
+          memberUpdate.waiverAcceptedAt = timestamp;
+          memberUpdate.waiverDisclaimerVersion = WAIVER_VERSION;
+        }
+
+        transaction.update(memberRef, memberUpdate);
+
+        celebrationState = {
+          memberName: `${member.firstName} ${member.lastName}`.trim(),
+          streakWeeks: streakCurrentWeeks,
+          daysAway,
+          returningAfterBreak: daysAway >= COMEBACK_THRESHOLD_DAYS,
+        };
       });
 
-      navigate('/kiosk/success');
+      navigate('/kiosk/success', { state: celebrationState });
     } catch (writeError) {
       console.error(writeError);
       setError('Check-in failed. Please try again or ask staff for help.');
@@ -120,6 +250,21 @@ export function ConfirmCheckInPage() {
         </button>
         <Link to="/kiosk/member-lookup">Back</Link>
       </div>
+      {waiverLoading ? <p>Checking waiver status...</p> : null}
+      {requiresWaiverAck ? (
+        <div className="panel">
+          <p>
+            Waiver signature is required every 6 months before check-in.
+          </p>
+          <button
+            className="button"
+            type="button"
+            onClick={() => navigate('/kiosk/casual-waiver', { state: { member, mode: 'member-waiver' } })}
+          >
+            Review and Sign Waiver
+          </button>
+        </div>
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
     </main>
   );

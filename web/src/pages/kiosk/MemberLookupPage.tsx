@@ -15,6 +15,7 @@ import { db } from '../../services/firebase';
 import type { Member } from '../../types/member';
 
 const MAX_RESULTS = 10;
+const PHONE_SCAN_LIMIT = 250;
 
 function normalizePhone(value: string) {
   return value.replace(/\D/g, '');
@@ -29,6 +30,7 @@ function mapMember(docId: string, data: Record<string, unknown>): Member {
     firstName: typeof data.firstName === 'string' ? data.firstName : 'Unknown',
     lastName: typeof data.lastName === 'string' ? data.lastName : 'Member',
     phone: typeof data.phone === 'string' ? data.phone : '',
+    email: typeof data.email === 'string' ? data.email : undefined,
     status:
       data.status === 'active' || data.status === 'inactive' || data.status === 'suspended'
         ? data.status
@@ -46,7 +48,9 @@ export function MemberLookupPage() {
   const [loading, setLoading] = useState(false);
 
   const searchHint = useMemo(
-    () => (normalizePhone(term).length >= 3 ? 'Searching phone + last name...' : 'Searching last name...'),
+    () => (normalizePhone(term).length >= 3
+      ? 'Searching phone, member number + last name...'
+      : 'Searching member number + last name...'),
     [term],
   );
 
@@ -66,6 +70,7 @@ export function MemberLookupPage() {
       const inputLower = input.toLowerCase();
 
       const normalizedPhone = normalizePhone(input);
+      const inputUpper = input.toUpperCase();
       const byId = new Map<string, Member>();
 
       const lastNameQuery = query(
@@ -82,10 +87,36 @@ export function MemberLookupPage() {
       }
 
       if (normalizedPhone.length >= 3) {
-        const phoneQuery = query(memberCollection, where('phone', '==', normalizedPhone), limit(MAX_RESULTS));
-        const phoneSnapshot = await getDocs(phoneQuery);
-        for (const docSnap of phoneSnapshot.docs) {
+        const exactPhoneQuery = query(memberCollection, where('phone', '==', normalizedPhone), limit(MAX_RESULTS));
+        const exactPhoneSnapshot = await getDocs(exactPhoneQuery);
+        for (const docSnap of exactPhoneSnapshot.docs) {
           byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
+        }
+
+        // Fallback for legacy formatted phone values (spaces, +, dashes) in Firestore.
+        const phoneScanQuery = query(memberCollection, orderBy('lastNameLower'), limit(PHONE_SCAN_LIMIT));
+        const phoneScanSnapshot = await getDocs(phoneScanQuery);
+        for (const docSnap of phoneScanSnapshot.docs) {
+          const member = mapMember(docSnap.id, docSnap.data());
+          if (normalizePhone(member.phone).includes(normalizedPhone)) {
+            byId.set(docSnap.id, member);
+          }
+        }
+      }
+
+      // Member number match (exact + partial fallback).
+      const memberNumberExactQuery = query(memberCollection, where('memberNumber', '==', inputUpper), limit(MAX_RESULTS));
+      const memberNumberExactSnapshot = await getDocs(memberNumberExactQuery);
+      for (const docSnap of memberNumberExactSnapshot.docs) {
+        byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
+      }
+
+      const memberNumberScanQuery = query(memberCollection, orderBy('lastNameLower'), limit(PHONE_SCAN_LIMIT));
+      const memberNumberScanSnapshot = await getDocs(memberNumberScanQuery);
+      for (const docSnap of memberNumberScanSnapshot.docs) {
+        const member = mapMember(docSnap.id, docSnap.data());
+        if (member.memberNumber.toUpperCase().includes(inputUpper)) {
+          byId.set(docSnap.id, member);
         }
       }
 
@@ -107,10 +138,10 @@ export function MemberLookupPage() {
   return (
     <main className="page page-kiosk">
       <h1>Member Lookup</h1>
-      <p>Type your family name or phone number to find your profile.</p>
+      <p>Type your family name, phone number, or member number to find your profile.</p>
       <form className="panel" onSubmit={handleSearch}>
         <label>
-          Last name or phone
+          Last name, phone, or member number
           <input value={term} onChange={(event) => setTerm(event.target.value)} minLength={3} required />
         </label>
         <button className="button" type="submit" disabled={loading}>

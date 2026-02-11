@@ -11,7 +11,10 @@ service cloud.firestore {
 
     function isBootstrapAdmin() {
       // Dev bootstrap alignment with frontend env fallback.
-      return isSignedIn() && request.auth.token.email == "shane@drpresident.com";
+      return isSignedIn() && (
+        request.auth.token.email == "shane@drpresident.com" ||
+        request.auth.token.email == "shane@highpeekpro.com"
+      );
     }
 
     function isManager() {
@@ -31,16 +34,66 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         "lastCheckIn",
         "rankAttendance",
+        "streakBestWeeks",
+        "streakCurrentWeeks",
+        "streakLastWeekId",
         "totalCheckIns",
+        "waiverAcceptedAt",
+        "waiverDisclaimerVersion",
         "updatedAt"
       ]) &&
       request.resource.data.lastCheckIn is timestamp &&
       request.resource.data.updatedAt is timestamp &&
       request.resource.data.totalCheckIns is int &&
       (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["streakCurrentWeeks"]) ||
+        request.resource.data.streakCurrentWeeks is int
+      ) &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["streakBestWeeks"]) ||
+        request.resource.data.streakBestWeeks is int
+      ) &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["streakLastWeekId"]) ||
+        request.resource.data.streakLastWeekId is string
+      ) &&
+      (
         !request.resource.data.diff(resource.data).affectedKeys().hasAny(["rankAttendance"]) ||
         request.resource.data.rankAttendance is map
+      ) &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["waiverAcceptedAt"]) ||
+        request.resource.data.waiverAcceptedAt is timestamp
+      ) &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["waiverDisclaimerVersion"]) ||
+        request.resource.data.waiverDisclaimerVersion is string
       );
+    }
+
+    function isMemberWaiverRefreshUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        "waiverAcceptedAt",
+        "waiverDisclaimerVersion",
+        "updatedAt"
+      ]) &&
+      request.resource.data.updatedAt is timestamp &&
+      request.resource.data.waiverAcceptedAt is timestamp &&
+      request.resource.data.waiverDisclaimerVersion is string;
+    }
+
+    function isStaffRankUpdate() {
+      return isSignedIn() &&
+      request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        "rank",
+        "updatedAt"
+      ]) &&
+      request.resource.data.rank is map &&
+      request.resource.data.rank.belt is string &&
+      request.resource.data.rank.stripes is int &&
+      request.resource.data.rank.stripes >= 0 &&
+      request.resource.data.rank.stripes <= 4 &&
+      request.resource.data.updatedAt is timestamp;
     }
 
     match /members/{memberId} {
@@ -48,12 +101,18 @@ service cloud.firestore {
       // Tighten later with App Check + callable boundary if needed.
       allow read: if true;
       allow create, delete: if isAdmin() || isBootstrapAdmin();
-      allow update: if isAdmin() || isBootstrapAdmin() || isKioskCounterUpdate();
+      allow update: if isAdmin() || isBootstrapAdmin() || isKioskCounterUpdate() || isStaffRankUpdate() || isMemberWaiverRefreshUpdate();
     }
 
     match /attendanceLogs/{logId} {
       allow create: if true;
       allow read: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    match /memberRankHistory/{historyId} {
+      allow read: if isCoachOrAdmin();
+      allow create: if isSignedIn();
       allow update, delete: if false;
     }
 
@@ -69,6 +128,11 @@ service cloud.firestore {
     }
 
     match /settings/{settingId} {
+      allow read: if isCoachOrAdmin();
+      allow write: if isAdmin() || isBootstrapAdmin();
+    }
+
+    match /staffUsers/{userId} {
       allow read: if isCoachOrAdmin();
       allow write: if isAdmin() || isBootstrapAdmin();
     }

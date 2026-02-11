@@ -180,6 +180,69 @@ p {
   gap: 8px;
 }
 
+.signature-pad {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  touch-action: none;
+}
+
+.waiver-copy {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.confetti-burst {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -24px;
+  width: 10px;
+  height: 18px;
+  border-radius: 2px;
+  opacity: 0.95;
+  background: linear-gradient(180deg, #ffd34d, #c80f12);
+  animation: confetti-fall 1400ms ease-in forwards;
+}
+
+.confetti-piece:nth-child(3n) {
+  background: linear-gradient(180deg, #ffffff, #c80f12);
+}
+
+.confetti-piece:nth-child(4n) {
+  background: linear-gradient(180deg, #e0e0e0, #7a7a7a);
+}
+
+@keyframes confetti-fall {
+  0% {
+    transform: translate3d(0, -20px, 0) rotate(0deg);
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  100% {
+    transform: translate3d(0, 110vh, 0) rotate(540deg);
+    opacity: 0;
+  }
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -197,7 +260,25 @@ input {
   font-size: 1rem;
 }
 
+select,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  padding: 12px 13px;
+  font-size: 1rem;
+}
+
 input:focus {
+  outline: none;
+  border-color: rgba(200, 15, 18, 0.88);
+  box-shadow: 0 0 0 3px rgba(200, 15, 18, 0.24);
+}
+
+select:focus,
+textarea:focus {
   outline: none;
   border-color: rgba(200, 15, 18, 0.88);
   box-shadow: 0 0 0 3px rgba(200, 15, 18, 0.24);
