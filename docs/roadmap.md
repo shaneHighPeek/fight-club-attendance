@@ -3,12 +3,14 @@
 ## Phase 1: Core Kiosk Check-in (MVP)
 **Goal**: Basic member check-in functionality
 - [x] Set up Firebase project and hosting baseline
-- [x] Implement member search by phone/last name/member number (Firestore read + selection flow)
+- [x] Implement member search by first name/last name/member number/phone (Firestore read + selection flow)
 - [x] Create check-in logging system
 - [x] Design and implement basic kiosk UI shell
 - [x] Set up basic security rules (deployed)
 - [x] Kiosk success return timer (3.5s)
 - [x] Streak + celebration UX baseline (confetti/message)
+- [x] Kiosk lock flow after repeated failed lookups
+- [x] Kiosk unlock via coach/admin 4-digit PIN
 
 **Success Criteria**:
 - Members can check in with phone/last name
@@ -57,8 +59,9 @@
 - [x] Optional webhook security (Bearer token support)
 - [x] Outbound CRM webhook for member/attendance/waiver/rank events
 - [x] Inbound subscription webhook (`subscription.started`, `subscription.stopped`)
-- [ ] Idempotency key + dedupe guard for inbound events
-- [ ] Dead-letter handling UI (retry failed event manually)
+- [x] Idempotency key + dedupe guard for inbound events
+- [x] Manual retry control for failed webhook events (Admin)
+- [ ] Hard idempotency enforcement for all inbound webhook endpoints (any future endpoints)
 
 **Success Criteria**:
 - Reliable data sync to CRM
@@ -88,6 +91,8 @@
 - Membership management
 - Payment gateway source-of-truth sync for subscription status changes
 - Belt/stripe history timeline + CRM automation hooks
+- CSV import flow for existing member contacts (with dedupe and dry-run preview)
+- Belt table rules by age group (child/adult progression table support)
 
 ## Dependencies
 - Firebase project setup
@@ -96,13 +101,13 @@
 - Legal review of waiver process
 - Kiosk hardware decisions
 
-## Status Snapshot (February 11, 2026)
+## Status Snapshot (February 13, 2026)
 
 - Firebase project `fight-club-attendance-dev` is created and connected.
 - Firestore database is created and Firestore rules/indexes are deployed.
 - Web app is connected to Firebase via `web/.env.local`.
 - Admin login works for bootstrap admin email.
-- Kiosk lookup works against Firestore members (name/phone/member number).
+- Kiosk lookup works against Firestore members (first name/last name/phone/member number).
 - Check-in write transaction is implemented (`attendanceLogs` + member counters).
 - Check-in writes now include `attendanceLevel` (sessions at current belt+stripe) and per-rank counters on member docs.
 - Kiosk success page now auto-returns to home after ~3.5 seconds.
@@ -112,11 +117,15 @@
 - Waiver flow is live for casual and renewal paths, with waiver version/expiry tracking.
 - Outbound webhook queue + scheduled delivery worker are implemented.
 - Inbound subscription webhook is implemented for membership status sync.
+- Inbound webhook duplicate suppression is implemented using `eventId`.
+- Failed webhook manual retry is implemented in Admin.
+- Kiosk lock/unlock is implemented with configurable coach/admin PINs.
+- CRM linkage is mirrored on member docs (`memberId`, `crmContactId`, `crmMemberId`).
 
 ## Next Delivery Path
 
-1. Deploy latest functions + hosting + rules in one batch milestone.
-2. Run end-to-end CRM sync validation for all event types using real check-in + rank-change actions.
-3. Add inbound dedupe/idempotency and a manual retry control for failed webhook events.
+1. Demo pass with live dev URL and collect stakeholder feedback.
+2. Add CSV import workflow for existing member contacts.
+3. Add age-based belt table support (child/adult progression logic).
 4. Add payment gateway integration spec + endpoint contract tests.
 5. Add rank-history timeline reporting in Admin member profile (date range + count per belt/stripe period).

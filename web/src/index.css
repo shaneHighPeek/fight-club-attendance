@@ -61,7 +61,7 @@ body::after {
   max-width: 920px;
   margin: 0 auto;
   min-height: 100vh;
-  padding: 36px 20px 52px;
+  padding: 52px 20px 52px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -369,7 +369,7 @@ a {
 
 @media (max-width: 720px) {
   .page {
-    padding: 26px 16px 36px;
+    padding: 40px 16px 36px;
   }
 
   .page::before {
@@ -394,6 +394,8 @@ a {
 
   .button {
     width: 100%;
+    padding: 16px 18px;
+    font-size: 1.05rem;
     justify-content: center;
     text-align: center;
   }

@@ -87,6 +87,35 @@ All outbound events use a shared envelope so CRM can route by `eventType`.
 - `subscription.started`
 - `subscription.stopped`
 
+### Locked Payload Contract (v1)
+
+For `eventVersion: "1.0"`, existing mapped fields must not be renamed/removed/moved.
+Only additive optional fields are allowed.
+
+All outbound events should include a stable payload envelope with these blocks
+(when data is available):
+
+- `member`
+  - `id`, `memberNumber`, `firstName`, `lastName`, `fullName`
+  - `email`, `phone`, `phoneE164`, `phoneRaw` (if normalized)
+  - `status`, `membershipType`, `rank`
+  - `streak`, `totals`, `waiver`
+- `attendance`
+  - `attendanceLogId`, `checkInTime`, `type`, `locationId`, `status`
+  - `attendanceLevel`, `belt`, `stripes`
+  - `streakWeeksAtCheckIn`, `daysSinceLastCheckIn`, `returningAfterBreak`
+- `waiver`
+  - `waiverId`, `version`, `signedAt`, `expiresAt`, `acceptedAt`
+- `streak`
+  - `currentWeeks`, `bestWeeks`, `lastWeekId`
+- `totals`
+  - `totalCheckIns`
+
+`attendance.checked_in` keeps existing legacy scalar fields for compatibility
+(`attendanceLogId`, `checkInTime`, `type`, `locationId`, `attendanceLevel`,
+`belt`, `stripes`, `streakWeeksAtCheckIn`, `daysSinceLastCheckIn`,
+`returningAfterBreak`) and also includes the structured blocks above.
+
 ### Delivery Model
 
 - App writes envelope rows to `webhookEvents` with `status = pending`.

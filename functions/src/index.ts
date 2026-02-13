@@ -6,6 +6,7 @@ import { HttpsError, onCall, onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions";
 import { google } from "googleapis";
+import { createHash } from "node:crypto";
 
 initializeApp();
 
@@ -43,6 +44,46 @@ interface OutboundEventEnvelope {
 
 const DELIVERY_BACKOFF_SECONDS = [60, 300, 900, 3600, 21600];
 const MAX_DELIVERY_ATTEMPTS = DELIVERY_BACKOFF_SECONDS.length;
+const INBOUND_EVENT_COLLECTION = "inboundWebhookEvents";
+const KIOSK_SETTINGS_DOC_ID = "kioskSecurity";
+
+function hashPin(pin: string): string {
+  return createHash("sha256").update(pin).digest("hex");
+}
+
+function isFourDigitPin(value: string): boolean {
+  return /^\d{4}$/.test(value);
+}
+
+function kioskSettingsRef() {
+  return db.collection("settings").doc(KIOSK_SETTINGS_DOC_ID);
+}
+
+async function markInboundEventProcessed(source: string, eventId: string): Promise<boolean> {
+  const normalizedSource = source.trim().toLowerCase();
+  const normalizedEventId = eventId.trim();
+  if (!normalizedSource || !normalizedEventId) {
+    return false;
+  }
+
+  const docId = `${normalizedSource}:${normalizedEventId}`;
+  const ref = db.collection(INBOUND_EVENT_COLLECTION).doc(docId);
+
+  try {
+    await ref.create({
+      source: normalizedSource,
+      eventId: normalizedEventId,
+      createdAt: Timestamp.now()
+    });
+    return false;
+  } catch (error) {
+    const code = (error as { code?: number | string } | undefined)?.code;
+    if (code === 6 || code === "already-exists") {
+      return true;
+    }
+    throw error;
+  }
+}
 
 /**
  * Baseline health function for deploy verification.
@@ -102,6 +143,137 @@ function toIsoDate(value: unknown): string {
   return new Date().toISOString();
 }
 
+function toE164Phone(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^\+\d{8,15}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) {
+    return null;
+  }
+
+  if (digits.startsWith("00") && digits.length > 2) {
+    return `+${digits.slice(2)}`;
+  }
+
+  // AU default normalization for local formats.
+  if (digits.startsWith("0") && digits.length >= 9) {
+    return `+61${digits.slice(1)}`;
+  }
+
+  if (digits.startsWith("61") && digits.length >= 10) {
+    return `+${digits}`;
+  }
+
+  if (digits.length === 9) {
+    return `+61${digits}`;
+  }
+
+  if (digits.length >= 8 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+
+  return null;
+}
+
+function enrichPayloadPhones(payload: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...payload };
+
+  if (typeof next.phone === "string") {
+    const formatted = toE164Phone(next.phone);
+    if (formatted) {
+      if (next.phone !== formatted) {
+        next.phoneRaw = next.phone;
+      }
+      next.phone = formatted;
+      next.phoneE164 = formatted;
+    }
+  }
+
+  if (typeof next.member === "object" && next.member !== null) {
+    const member = { ...(next.member as Record<string, unknown>) };
+    if (typeof member.phone === "string") {
+      const formatted = toE164Phone(member.phone);
+      if (formatted) {
+        if (member.phone !== formatted) {
+          member.phoneRaw = member.phone;
+        }
+        member.phone = formatted;
+        member.phoneE164 = formatted;
+      }
+    }
+    next.member = member;
+  }
+
+  return next;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function buildMemberSnapshot(
+  memberId: string | undefined,
+  memberData: Record<string, unknown> | undefined
+): Record<string, unknown> | null {
+  if (!memberId || !memberData) {
+    return null;
+  }
+
+  const firstName = typeof memberData.firstName === "string" ? memberData.firstName : "";
+  const lastName = typeof memberData.lastName === "string" ? memberData.lastName : "";
+  const rank =
+    typeof memberData.rank === "object" && memberData.rank !== null
+      ? (memberData.rank as Record<string, unknown>)
+      : {};
+
+  return {
+    id: memberId,
+    memberId,
+    memberNumber: readString(memberData.memberNumber) ?? memberId,
+    firstName,
+    lastName,
+    fullName: `${firstName} ${lastName}`.trim(),
+    email: readString(memberData.email) ?? "",
+    phone: readString(memberData.phone) ?? "",
+    crmContactId: readString(memberData.crmContactId),
+    crmMemberId: readString(memberData.crmMemberId) ?? readString(memberData.crmContactId),
+    hasCrmContactId: Boolean(readString(memberData.crmContactId) || readString(memberData.crmMemberId)),
+    status: readString(memberData.status) ?? "active",
+    membershipType: readString(memberData.membershipType) ?? "unknown",
+    rank: {
+      belt: readString(rank.belt) ?? "white",
+      stripes: readNumber(rank.stripes) ?? 0
+    },
+    streak: {
+      currentWeeks: readNumber(memberData.streakCurrentWeeks),
+      bestWeeks: readNumber(memberData.streakBestWeeks),
+      lastWeekId: readString(memberData.streakLastWeekId)
+    },
+    totals: {
+      totalCheckIns: readNumber(memberData.totalCheckIns)
+    },
+    waiver: {
+      acceptedAt: memberData.waiverAcceptedAt ? toIsoDate(memberData.waiverAcceptedAt) : null,
+      version: readString(memberData.waiverDisclaimerVersion)
+    }
+  };
+}
+
 async function enqueueOutboundEvent(
   eventType: OutboundEventType,
   payload: Record<string, unknown>,
@@ -134,7 +306,7 @@ async function enqueueOutboundEvent(
     memberId,
     crmContactId,
     hasCrmContactId: Boolean(crmContactId),
-    payload
+    payload: enrichPayloadPhones(payload)
   };
 
   await eventRef.set({
@@ -224,10 +396,11 @@ export const deliverPendingWebhooks = onSchedule(
         memberId: typeof data.memberId === "string" ? data.memberId : undefined,
         crmContactId: typeof data.crmContactId === "string" ? data.crmContactId : null,
         hasCrmContactId: data.hasCrmContactId === true,
-        payload:
+        payload: enrichPayloadPhones(
           typeof data.payload === "object" && data.payload !== null
             ? (data.payload as Record<string, unknown>)
             : {}
+        )
       };
 
       try {
@@ -298,6 +471,16 @@ export const subscriptionWebhook = onRequest(async (req, res) => {
   }
 
   const payload = (req.body?.payload ?? {}) as Record<string, unknown>;
+  const eventId = typeof req.body?.eventId === "string"
+    ? req.body.eventId
+    : (typeof payload.eventId === "string" ? payload.eventId : "");
+  if (eventId) {
+    const duplicate = await markInboundEventProcessed("subscription", eventId);
+    if (duplicate) {
+      res.status(200).json({ ok: true, duplicate: true, eventId });
+      return;
+    }
+  }
   const memberId = typeof req.body?.memberId === "string"
     ? req.body.memberId
     : (typeof payload.memberId === "string" ? payload.memberId : "");
@@ -341,18 +524,23 @@ export const subscriptionWebhook = onRequest(async (req, res) => {
       membershipType: mappedMembershipType,
       status: eventType === "subscription.started" ? "active" : "inactive",
       crmContactId: crmContactId || null,
+      crmMemberId: crmContactId || null,
       subscriptionUpdatedAt: Timestamp.now(),
       updatedAt: Timestamp.now()
     },
     { merge: true }
   );
+  const updatedMemberSnapshot = await memberRef.get();
+  const updatedMemberData = updatedMemberSnapshot.data() as Record<string, unknown> | undefined;
+  const member = buildMemberSnapshot(memberRef.id, updatedMemberData);
 
   await enqueueOutboundEvent(
     eventType as OutboundEventType,
     {
       membershipType: mappedMembershipType,
       crmContactId: crmContactId || null,
-      sourceEventType: eventType
+      sourceEventType: eventType,
+      member
     },
     memberRef.id
   );
@@ -363,6 +551,70 @@ export const subscriptionWebhook = onRequest(async (req, res) => {
     memberId: memberRef.id,
     membershipType: mappedMembershipType
   });
+});
+
+/**
+ * Inbound CRM link webhook.
+ * Stores CRM contact ID on an existing member without changing subscription status.
+ */
+export const linkCrmContactWebhook = onRequest(async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "method_not_allowed" });
+    return;
+  }
+
+  const memberId = typeof req.body?.memberId === "string" ? req.body.memberId.trim() : "";
+  const crmContactId = typeof req.body?.crmContactId === "string" ? req.body.crmContactId.trim() : "";
+  const payload = (req.body?.payload ?? {}) as Record<string, unknown>;
+  const eventId = typeof req.body?.eventId === "string"
+    ? req.body.eventId
+    : (typeof payload.eventId === "string" ? payload.eventId : "");
+
+  if (eventId) {
+    const duplicate = await markInboundEventProcessed("crm-contact-link", eventId);
+    if (duplicate) {
+      res.status(200).json({ ok: true, duplicate: true, eventId });
+      return;
+    }
+  }
+
+  if (!memberId || !crmContactId) {
+    res.status(400).json({ error: "memberId_and_crmContactId_required" });
+    return;
+  }
+
+  const memberRef = db.collection("members").doc(memberId);
+  const memberSnap = await memberRef.get();
+  if (!memberSnap.exists) {
+    res.status(404).json({ error: "member_not_found" });
+    return;
+  }
+
+  await memberRef.set(
+    {
+      crmContactId,
+      crmMemberId: crmContactId,
+      updatedAt: Timestamp.now()
+    },
+    { merge: true }
+  );
+  const updatedMemberSnapshot = await memberRef.get();
+  const updatedMemberData = updatedMemberSnapshot.data() as Record<string, unknown> | undefined;
+  const member = buildMemberSnapshot(memberId, updatedMemberData);
+
+  await enqueueOutboundEvent(
+    "member.updated",
+    {
+      memberId,
+      crmContactId,
+      sourceEventType: "crm.contact_linked",
+      member,
+      ...payload
+    },
+    memberId
+  );
+
+  res.status(200).json({ ok: true, memberId, crmContactId });
 });
 
 /**
@@ -475,23 +727,20 @@ export const onMemberCreated = onDocumentCreated("members/{memberId}", async (ev
   if (!snapshot) {
     return;
   }
+  await snapshot.ref.set(
+    {
+      memberId: snapshot.id,
+      updatedAt: Timestamp.now()
+    },
+    { merge: true }
+  );
   const data = snapshot.data() as Record<string, unknown>;
   if (data.membershipType !== "temp") {
     return;
   }
-
-  await enqueueOutboundEvent(
-    "member.created_temp",
-    {
-      memberNumber: typeof data.memberNumber === "string" ? data.memberNumber : snapshot.id,
-      firstName: typeof data.firstName === "string" ? data.firstName : "",
-      lastName: typeof data.lastName === "string" ? data.lastName : "",
-      email: typeof data.email === "string" ? data.email : "",
-      phone: typeof data.phone === "string" ? data.phone : "",
-      membershipType: "temp"
-    },
-    snapshot.id
-  );
+  // Temp onboarding sends a single consolidated event from onAttendanceCreated.
+  // This avoids race conditions in CRM workflows (member/waiver/attendance sequencing).
+  return;
 });
 
 /**
@@ -504,7 +753,18 @@ export const onWaiverSigned = onDocumentCreated("waivers/{waiverId}", async (eve
   }
   const data = snapshot.data() as Record<string, unknown>;
   const memberId = typeof data.memberId === "string" ? data.memberId : undefined;
+  let memberData: Record<string, unknown> | undefined;
 
+  if (memberId) {
+    const memberSnapshot = await db.collection("members").doc(memberId).get();
+    memberData = memberSnapshot.data() as Record<string, unknown> | undefined;
+    if (memberData?.membershipType === "temp") {
+      // Temp onboarding sends one consolidated event from onAttendanceCreated.
+      return;
+    }
+  }
+
+  const member = buildMemberSnapshot(memberId, memberData);
   await enqueueOutboundEvent(
     "waiver.signed",
     {
@@ -514,7 +774,8 @@ export const onWaiverSigned = onDocumentCreated("waivers/{waiverId}", async (eve
       firstName: typeof data.firstName === "string" ? data.firstName : "",
       lastName: typeof data.lastName === "string" ? data.lastName : "",
       email: typeof data.email === "string" ? data.email : "",
-      phone: typeof data.phone === "string" ? data.phone : ""
+      phone: typeof data.phone === "string" ? data.phone : "",
+      member
     },
     memberId
   );
@@ -530,6 +791,8 @@ export const onAttendanceCreated = onDocumentCreated("attendanceLogs/{logId}", a
   }
   const data = snapshot.data() as Record<string, unknown>;
   const memberId = typeof data.memberId === "string" ? data.memberId : undefined;
+  const type = typeof data.type === "string" ? data.type : "unknown";
+  let memberData: Record<string, unknown> | undefined;
 
   const rank =
     typeof data.memberRankAtCheckIn === "object" && data.memberRankAtCheckIn !== null
@@ -539,18 +802,109 @@ export const onAttendanceCreated = onDocumentCreated("attendanceLogs/{logId}", a
   const streakWeeks =
     typeof data.streakWeeksAtCheckIn === "number" ? data.streakWeeksAtCheckIn : undefined;
 
+  if (memberId) {
+    const memberSnapshot = await db.collection("members").doc(memberId).get();
+    memberData = memberSnapshot.data() as Record<string, unknown> | undefined;
+  }
+  const memberSnapshotPayload = buildMemberSnapshot(memberId, memberData);
+  const attendancePayload = {
+    attendanceLogId: snapshot.id,
+    checkInTime: toIsoDate(data.checkInTime),
+    type,
+    locationId: typeof data.locationId === "string" ? data.locationId : "unknown",
+    status: typeof data.status === "string" ? data.status : "completed",
+    attendanceLevel: typeof data.attendanceLevel === "number" ? data.attendanceLevel : null,
+    belt: typeof rank.belt === "string" ? rank.belt : null,
+    stripes: typeof rank.stripes === "number" ? rank.stripes : null,
+    streakWeeksAtCheckIn: streakWeeks ?? null,
+    daysSinceLastCheckIn:
+      typeof data.daysSinceLastCheckIn === "number" ? data.daysSinceLastCheckIn : null,
+    returningAfterBreak: data.returningAfterBreak === true
+  };
+
+  // Single consolidated temp onboarding event:
+  // member + waiver summary + attendance in one payload.
+  if (type === "casual" && memberId && memberData?.membershipType === "temp") {
+    const waiverDocs = await db.collection("waivers").where("memberId", "==", memberId).limit(10).get();
+    let latestWaiver: Record<string, unknown> | null = null;
+    let latestSignedAt = 0;
+
+    for (const waiverDoc of waiverDocs.docs) {
+      const waiver = waiverDoc.data() as Record<string, unknown>;
+      const signedAt = waiver.signedAt instanceof Timestamp ? waiver.signedAt.toMillis() : 0;
+      if (signedAt >= latestSignedAt) {
+        latestSignedAt = signedAt;
+        latestWaiver = { id: waiverDoc.id, ...waiver };
+      }
+    }
+
+    await enqueueOutboundEvent(
+      "member.created_temp",
+      {
+        member: memberSnapshotPayload,
+        waiver: latestWaiver
+          ? {
+              waiverId: latestWaiver.id,
+              version: typeof latestWaiver.version === "string" ? latestWaiver.version : "unknown",
+              signedAt: toIsoDate(latestWaiver.signedAt),
+              expiresAt: toIsoDate(latestWaiver.expiresAt),
+              acceptedAt: memberSnapshotPayload?.waiver && typeof memberSnapshotPayload.waiver === "object"
+                ? ((memberSnapshotPayload.waiver as Record<string, unknown>).acceptedAt ?? null)
+                : null
+            }
+          : {
+              waiverId: null,
+              version: null,
+              signedAt: null,
+              expiresAt: null,
+              acceptedAt: memberSnapshotPayload?.waiver && typeof memberSnapshotPayload.waiver === "object"
+                ? ((memberSnapshotPayload.waiver as Record<string, unknown>).acceptedAt ?? null)
+                : null
+            },
+        attendance: attendancePayload,
+        streak: memberSnapshotPayload?.streak ?? {
+          currentWeeks: streakWeeks ?? null,
+          bestWeeks: null,
+          lastWeekId: null
+        },
+        totals: memberSnapshotPayload?.totals ?? {
+          totalCheckIns: null
+        }
+      },
+      memberId
+    );
+    return;
+  }
+
   await enqueueOutboundEvent(
     "attendance.checked_in",
     {
-      attendanceLogId: snapshot.id,
-      checkInTime: toIsoDate(data.checkInTime),
-      type: typeof data.type === "string" ? data.type : "unknown",
-      locationId: typeof data.locationId === "string" ? data.locationId : "unknown",
-      attendanceLevel: typeof data.attendanceLevel === "number" ? data.attendanceLevel : null,
-      belt: typeof rank.belt === "string" ? rank.belt : null,
-      stripes: typeof rank.stripes === "number" ? rank.stripes : null,
-      streakWeeksAtCheckIn: streakWeeks ?? null,
-      returningAfterBreak: data.returningAfterBreak === true
+      // Keep legacy mapped fields stable.
+      attendanceLogId: attendancePayload.attendanceLogId,
+      checkInTime: attendancePayload.checkInTime,
+      type: attendancePayload.type,
+      locationId: attendancePayload.locationId,
+      attendanceLevel: attendancePayload.attendanceLevel,
+      belt: attendancePayload.belt,
+      stripes: attendancePayload.stripes,
+      streakWeeksAtCheckIn: attendancePayload.streakWeeksAtCheckIn,
+      daysSinceLastCheckIn: attendancePayload.daysSinceLastCheckIn,
+      returningAfterBreak: attendancePayload.returningAfterBreak,
+      // Stable structured blocks for CRM routing/storage.
+      member: memberSnapshotPayload,
+      attendance: attendancePayload,
+      streak: memberSnapshotPayload?.streak ?? {
+        currentWeeks: streakWeeks ?? null,
+        bestWeeks: null,
+        lastWeekId: null
+      },
+      totals: memberSnapshotPayload?.totals ?? {
+        totalCheckIns: null
+      },
+      waiver: memberSnapshotPayload?.waiver ?? {
+        acceptedAt: null,
+        version: null
+      }
     },
     memberId
   );
@@ -562,7 +916,12 @@ export const onAttendanceCreated = onDocumentCreated("attendanceLogs/{logId}", a
         attendanceLogId: snapshot.id,
         streakWeeks,
         milestone: `${streakWeeks}_weeks`,
-        checkInTime: toIsoDate(data.checkInTime)
+        checkInTime: toIsoDate(data.checkInTime),
+        member: memberSnapshotPayload,
+        attendance: attendancePayload,
+        totals: memberSnapshotPayload?.totals ?? {
+          totalCheckIns: null
+        }
       },
       memberId
     );
@@ -581,6 +940,12 @@ export const onMemberRankChanged = onDocumentCreated(
     }
     const data = snapshot.data() as Record<string, unknown>;
     const memberId = typeof data.memberId === "string" ? data.memberId : undefined;
+    let memberData: Record<string, unknown> | undefined;
+    if (memberId) {
+      const memberSnapshot = await db.collection("members").doc(memberId).get();
+      memberData = memberSnapshot.data() as Record<string, unknown> | undefined;
+    }
+    const member = buildMemberSnapshot(memberId, memberData);
 
     await enqueueOutboundEvent(
       "member.rank_changed",
@@ -591,7 +956,8 @@ export const onMemberRankChanged = onDocumentCreated(
         fromStripes: typeof data.fromStripes === "number" ? data.fromStripes : null,
         toBelt: typeof data.toBelt === "string" ? data.toBelt : null,
         toStripes: typeof data.toStripes === "number" ? data.toStripes : null,
-        note: typeof data.note === "string" ? data.note : ""
+        note: typeof data.note === "string" ? data.note : "",
+        member
       },
       memberId
     );
@@ -881,5 +1247,188 @@ export const linkWaiverToMember = onCall(async (request) => {
     ok: true,
     memberId,
     waiverId
+  };
+});
+
+/**
+ * Manually retries a failed outbound webhook event.
+ * Does not modify payload/envelope content.
+ */
+export const retryWebhookEvent = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign-in required.");
+  }
+
+  const callerRole = request.auth.token.role;
+  const callerEmail = request.auth.token.email;
+  const canRetry =
+    callerRole === "admin" ||
+    callerRole === "manager" ||
+    callerRole === "coach" ||
+    (typeof callerEmail === "string" && BOOTSTRAP_ADMIN_EMAILS.has(callerEmail.toLowerCase()));
+
+  if (!canRetry) {
+    throw new HttpsError("permission-denied", "Coach, manager, or admin role required.");
+  }
+
+  const eventIdRaw = request.data?.eventId;
+  const forceRaw = request.data?.force;
+  if (typeof eventIdRaw !== "string" || !eventIdRaw.trim()) {
+    throw new HttpsError("invalid-argument", "eventId is required.");
+  }
+
+  const eventId = eventIdRaw.trim();
+  const force = forceRaw === true;
+  const eventRef = db.collection("webhookEvents").doc(eventId);
+  const snapshot = await eventRef.get();
+  if (!snapshot.exists) {
+    throw new HttpsError("not-found", "Webhook event not found.");
+  }
+
+  const data = snapshot.data() as Record<string, unknown>;
+  const status = typeof data.status === "string" ? data.status : "unknown";
+  if (status === "completed" && !force) {
+    throw new HttpsError("failed-precondition", "Completed events require force=true to retry.");
+  }
+
+  await eventRef.set(
+    {
+      status: "pending",
+      nextAttempt: Timestamp.now(),
+      error: null,
+      updatedAt: Timestamp.now(),
+      manualRetryAt: Timestamp.now(),
+      manualRetryBy: request.auth.uid
+    },
+    { merge: true }
+  );
+
+  logger.info("Webhook event manually retried", {
+    eventId,
+    previousStatus: status,
+    force,
+    retriedBy: request.auth.uid
+  });
+
+  return {
+    ok: true,
+    eventId,
+    previousStatus: status
+  };
+});
+
+/**
+ * Records kiosk lock events for audit.
+ * Kiosk can call this without auth.
+ */
+export const recordKioskLockEvent = onCall(async (request) => {
+  const typeRaw = request.data?.type;
+  const reasonRaw = request.data?.reason;
+  const locationIdRaw = request.data?.locationId;
+
+  const type = typeof typeRaw === "string" ? typeRaw.trim().toLowerCase() : "";
+  const reason = typeof reasonRaw === "string" ? reasonRaw.trim().toLowerCase() : "";
+  const locationId = typeof locationIdRaw === "string" && locationIdRaw.trim() ? locationIdRaw.trim() : "ashmore";
+
+  if ((type !== "locked" && type !== "unlocked") || !reason) {
+    throw new HttpsError("invalid-argument", "type and reason are required.");
+  }
+
+  await db.collection("kioskLockEvents").add({
+    locationId,
+    type,
+    reason,
+    createdAt: Timestamp.now()
+  });
+
+  return { ok: true };
+});
+
+/**
+ * Sets shared kiosk coach/admin PIN hashes in settings.
+ * Admin/manager only.
+ */
+export const setKioskPins = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign-in required.");
+  }
+
+  const callerRole = request.auth.token.role;
+  const callerEmail = request.auth.token.email;
+  const canManagePins =
+    callerRole === "admin" ||
+    callerRole === "manager" ||
+    (typeof callerEmail === "string" && BOOTSTRAP_ADMIN_EMAILS.has(callerEmail.toLowerCase()));
+
+  if (!canManagePins) {
+    throw new HttpsError("permission-denied", "Admin or manager role required.");
+  }
+
+  const coachPinRaw = request.data?.coachPin;
+  const adminPinRaw = request.data?.adminPin;
+  const coachPin = typeof coachPinRaw === "string" ? coachPinRaw.trim() : "";
+  const adminPin = typeof adminPinRaw === "string" ? adminPinRaw.trim() : "";
+
+  if (!isFourDigitPin(coachPin) || !isFourDigitPin(adminPin)) {
+    throw new HttpsError("invalid-argument", "coachPin and adminPin must be 4 digits.");
+  }
+
+  await kioskSettingsRef().set(
+    {
+      coachPinHash: hashPin(coachPin),
+      adminPinHash: hashPin(adminPin),
+      pinUpdatedAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      updatedByUid: request.auth.uid
+    },
+    { merge: true }
+  );
+
+  return { ok: true };
+});
+
+/**
+ * Unlocks kiosk by validating submitted 4-digit PIN against stored hashes.
+ * Kiosk can call this without auth.
+ */
+export const unlockKioskWithPin = onCall(async (request) => {
+  const pinRaw = request.data?.pin;
+  const locationIdRaw = request.data?.locationId;
+  const pin = typeof pinRaw === "string" ? pinRaw.trim() : "";
+  const locationId = typeof locationIdRaw === "string" && locationIdRaw.trim() ? locationIdRaw.trim() : "ashmore";
+
+  if (!isFourDigitPin(pin)) {
+    throw new HttpsError("invalid-argument", "PIN must be 4 digits.");
+  }
+
+  const settingsSnapshot = await kioskSettingsRef().get();
+  const settingsData = settingsSnapshot.data() as Record<string, unknown> | undefined;
+  const candidateHash = hashPin(pin);
+  const coachPinHash = typeof settingsData?.coachPinHash === "string" ? settingsData.coachPinHash : "";
+  const adminPinHash = typeof settingsData?.adminPinHash === "string" ? settingsData.adminPinHash : "";
+
+  let unlockedByRole: "coach" | "admin" | null = null;
+  if (candidateHash && coachPinHash && candidateHash === coachPinHash) {
+    unlockedByRole = "coach";
+  } else if (candidateHash && adminPinHash && candidateHash === adminPinHash) {
+    unlockedByRole = "admin";
+  }
+
+  if (!unlockedByRole) {
+    throw new HttpsError("permission-denied", "Invalid PIN.");
+  }
+
+  await db.collection("kioskLockEvents").add({
+    locationId,
+    type: "unlocked",
+    reason: "manual_override",
+    unlockedByRole,
+    unlockedByStaffId: request.auth?.uid ?? null,
+    createdAt: Timestamp.now()
+  });
+
+  return {
+    ok: true,
+    unlockedByRole
   };
 });

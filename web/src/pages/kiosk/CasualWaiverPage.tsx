@@ -223,10 +223,14 @@ export function CasualWaiverPage() {
             membershipType: 'temp',
             rank: {
               belt: 'white',
-              stripes: 0,
+              stripes: 1,
             },
             totalCheckIns: 0,
             createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          await updateDoc(memberRef, {
+            memberId: memberRef.id,
             updatedAt: serverTimestamp(),
           });
           memberIdForWaiver = memberRef.id;

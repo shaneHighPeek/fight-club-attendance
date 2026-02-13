@@ -8,11 +8,13 @@ import {
   endAt,
   where,
 } from 'firebase/firestore';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { httpsCallable } from 'firebase/functions';
 import { Link, useNavigate } from 'react-router-dom';
 
-import { db } from '../../services/firebase';
+import { db, functions } from '../../services/firebase';
 import type { Member } from '../../types/member';
+import { isKioskLocked, registerFailedLookupAndCheckLock, resetFailedLookups } from '../../utils/kioskLock';
 
 const MAX_RESULTS = 10;
 const PHONE_SCAN_LIMIT = 250;
@@ -47,10 +49,32 @@ export function MemberLookupPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (isKioskLocked()) {
+      navigate('/kiosk/locked', { replace: true });
+    }
+  }, [navigate]);
+
+  async function logLockedEvent() {
+    try {
+      const callable = httpsCallable<{ type: 'locked'; reason: string; locationId: string }, { ok: boolean }>(
+        functions,
+        'recordKioskLockEvent',
+      );
+      await callable({
+        type: 'locked',
+        reason: 'failed_lookups',
+        locationId: 'ashmore',
+      });
+    } catch (logError) {
+      console.error(logError);
+    }
+  }
+
   const searchHint = useMemo(
     () => (normalizePhone(term).length >= 3
-      ? 'Searching phone, member number + last name...'
-      : 'Searching member number + last name...'),
+      ? 'Searching phone, member number, first + last name...'
+      : 'Searching member number, first + last name...'),
     [term],
   );
 
@@ -111,17 +135,30 @@ export function MemberLookupPage() {
         byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
       }
 
-      const memberNumberScanQuery = query(memberCollection, orderBy('lastNameLower'), limit(PHONE_SCAN_LIMIT));
-      const memberNumberScanSnapshot = await getDocs(memberNumberScanQuery);
-      for (const docSnap of memberNumberScanSnapshot.docs) {
+      const profileScanQuery = query(memberCollection, orderBy('lastNameLower'), limit(PHONE_SCAN_LIMIT));
+      const profileScanSnapshot = await getDocs(profileScanQuery);
+      for (const docSnap of profileScanSnapshot.docs) {
         const member = mapMember(docSnap.id, docSnap.data());
-        if (member.memberNumber.toUpperCase().includes(inputUpper)) {
+        const firstNameMatches = member.firstName.toLowerCase().includes(inputLower);
+        const memberNumberMatches = member.memberNumber.toUpperCase().includes(inputUpper);
+        if (memberNumberMatches || firstNameMatches) {
           byId.set(docSnap.id, member);
         }
       }
 
       const merged = Array.from(byId.values());
       setResults(merged);
+
+      if (merged.length === 0) {
+        const lockState = registerFailedLookupAndCheckLock();
+        if (lockState.locked) {
+          await logLockedEvent();
+          navigate('/kiosk/locked', { replace: true });
+          return;
+        }
+      } else {
+        resetFailedLookups();
+      }
 
       if (merged.length === 1) {
         navigate('/kiosk/confirm-checkin', { state: { member: merged[0] } });
@@ -130,6 +167,12 @@ export function MemberLookupPage() {
       console.error(err);
       setError('Search failed. Check Firestore permissions and indexes.');
       setResults([]);
+      const lockState = registerFailedLookupAndCheckLock();
+      if (lockState.locked) {
+        await logLockedEvent();
+        navigate('/kiosk/locked', { replace: true });
+        return;
+      }
     } finally {
       setLoading(false);
     }
@@ -138,10 +181,10 @@ export function MemberLookupPage() {
   return (
     <main className="page page-kiosk">
       <h1>Member Lookup</h1>
-      <p>Type your family name, phone number, or member number to find your profile.</p>
+      <p>Type your first name, family name, phone number, or member number to find your profile.</p>
       <form className="panel" onSubmit={handleSearch}>
         <label>
-          Last name, phone, or member number
+          First/last name, phone, or member number
           <input value={term} onChange={(event) => setTerm(event.target.value)} minLength={3} required />
         </label>
         <button className="button" type="submit" disabled={loading}>

@@ -25,6 +25,9 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [coachPin, setCoachPin] = useState('');
+  const [adminPin, setAdminPin] = useState('');
+  const [savingPins, setSavingPins] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -116,6 +119,31 @@ export function SettingsPage() {
     }
   }
 
+  async function handleSavePins(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingPins(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const callable = httpsCallable<{ coachPin: string; adminPin: string }, { ok: boolean }>(
+        functions,
+        'setKioskPins',
+      );
+      await callable({
+        coachPin: coachPin.trim(),
+        adminPin: adminPin.trim(),
+      });
+      setMessage('Kiosk PINs updated.');
+      setCoachPin('');
+      setAdminPin('');
+    } catch (pinError) {
+      console.error(pinError);
+      setError('Failed to save kiosk PINs. Use 4 digits for each PIN.');
+    } finally {
+      setSavingPins(false);
+    }
+  }
+
   return (
     <main className="page page-admin">
       <h1>Settings</h1>
@@ -193,6 +221,40 @@ export function SettingsPage() {
         </label>
         <button className="button" type="submit" disabled={saving}>
           {saving ? 'Saving...' : 'Save Role'}
+        </button>
+      </form>
+
+      <form className="panel" onSubmit={handleSavePins}>
+        <h2>Kiosk PINs</h2>
+        <p>Set shared 4-digit coach and admin PINs used to unlock kiosk lock state.</p>
+        <label>
+          Coach PIN (4 digits)
+          <input
+            type="password"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={4}
+            value={coachPin}
+            onChange={(event) => setCoachPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+            placeholder="0000"
+            required
+          />
+        </label>
+        <label>
+          Admin PIN (4 digits)
+          <input
+            type="password"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={4}
+            value={adminPin}
+            onChange={(event) => setAdminPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+            placeholder="0000"
+            required
+          />
+        </label>
+        <button className="button" type="submit" disabled={savingPins || coachPin.length !== 4 || adminPin.length !== 4}>
+          {savingPins ? 'Saving PINs...' : 'Save Kiosk PINs'}
         </button>
       </form>
 
