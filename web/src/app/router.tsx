@@ -5,6 +5,7 @@ import { NotFoundPage } from '../pages/NotFoundPage';
 import { AdminHomePage } from '../pages/admin/AdminHomePage';
 import { AdminLoginPage } from '../pages/admin/AdminLoginPage';
 import { AttendancePage } from '../pages/admin/AttendancePage';
+import { ClassSchedulePage } from '../pages/admin/ClassSchedulePage';
 import { MembersPage } from '../pages/admin/MembersPage';
 import { SettingsPage } from '../pages/admin/SettingsPage';
 import { CasualWaiverPage } from '../pages/kiosk/CasualWaiverPage';
@@ -62,6 +63,10 @@ export const router = createBrowserRouter([
       {
         path: '/admin/attendance',
         element: <AttendancePage />,
+      },
+      {
+        path: '/admin/classes',
+        element: <ClassSchedulePage />,
       },
       {
         path: '/admin/members',

@@ -98,6 +98,7 @@ export function AdminHomePage() {
       <p>Signed in as {user?.email ?? 'unknown'} ({role ?? 'no role'})</p>
       <div className="actions">
         <Link className="button" to="/admin/attendance">Attendance</Link>
+        <Link className="button" to="/admin/classes">Class Schedule</Link>
         <Link className="button" to="/admin/members">Members</Link>
         <Link className="button" to="/admin/settings">Settings</Link>
         <button className="button button-secondary" onClick={() => signOut(auth)}>Sign Out</button>

@@ -83,6 +83,21 @@
 - Automated email reports
 - Member engagement scoring
 
+
+## Luke Business Ops Roadmap
+
+- [ ] Subscription integration hardening:
+  - Ensure member `status` and `membershipType` are always driven by live subscription state.
+  - Confirm payment/subscription events update app records in near real-time.
+- [ ] Member nurture campaign flow:
+  - Define and launch automated nurture path from lead/temp member to active member.
+- [ ] Self-serve order form:
+  - Add order form flow for prospects/members to self-enroll and trigger onboarding automations.
+- [ ] Merch store integration:
+  - Add online merch storefront flow and connect purchases to CRM contact records.
+- [ ] Phone answering options:
+  - Define and implement call handling options (routing, voicemail, after-hours, and missed-call follow-up automation).
+
 ## Future Considerations
 - Mobile app for check-in
 - Class scheduling integration

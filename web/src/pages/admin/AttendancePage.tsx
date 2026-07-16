@@ -18,10 +18,14 @@ interface AttendanceLogRow {
   id: string;
   memberId: string;
   memberName: string;
+  memberNickname: string;
   membershipType: string;
   belt: string;
   stripes: number | null;
   attendanceLevel: number | null;
+  className: string;
+  classTime: string;
+  isSubstitution: boolean;
   checkInTime: Date | null;
 }
 
@@ -71,6 +75,9 @@ export function AttendancePage() {
       const rawLogs = attendanceSnapshot.docs.map((docSnap) => {
         const data = docSnap.data();
         const checkInTime = data.checkInTime instanceof Timestamp ? data.checkInTime.toDate() : null;
+        const classSession = typeof data.classSession === 'object' && data.classSession !== null
+          ? data.classSession as Record<string, unknown>
+          : null;
         return {
           id: docSnap.id,
           memberId: typeof data.memberId === 'string' ? data.memberId : 'unknown',
@@ -90,6 +97,9 @@ export function AttendancePage() {
               ? data.memberRankAtCheckIn.stripes
               : null,
           attendanceLevel: typeof data.attendanceLevel === 'number' ? data.attendanceLevel : null,
+          className: typeof classSession?.actualClassName === 'string' ? classSession.actualClassName : 'Not recorded',
+          classTime: typeof classSession?.startTime === 'string' ? classSession.startTime : '—',
+          isSubstitution: classSession?.isSubstitution === true,
           checkInTime,
         };
       });
@@ -97,7 +107,7 @@ export function AttendancePage() {
       const uniqueMemberIds = Array.from(
         new Set(rawLogs.map((entry) => entry.memberId).filter((memberId) => memberId !== 'unknown')),
       );
-      const memberInfoById = new Map<string, { name: string; membershipType: string }>();
+      const memberInfoById = new Map<string, { name: string; nickname: string; membershipType: string }>();
 
       for (const memberIdChunk of chunk(uniqueMemberIds, 10)) {
         const membersSnapshot = await getDocs(
@@ -107,10 +117,12 @@ export function AttendancePage() {
           const data = memberDoc.data();
           const firstName = typeof data.firstName === 'string' ? data.firstName : '';
           const lastName = typeof data.lastName === 'string' ? data.lastName : '';
+          const nickname = typeof data.nickname === 'string' ? data.nickname : '';
           const fullName = `${firstName} ${lastName}`.trim();
           const membershipType = typeof data.membershipType === 'string' ? data.membershipType : 'unknown';
           memberInfoById.set(memberDoc.id, {
             name: fullName || memberDoc.id,
+            nickname,
             membershipType,
           });
         }
@@ -120,6 +132,7 @@ export function AttendancePage() {
         rawLogs.map((entry) => ({
           ...entry,
           memberName: memberInfoById.get(entry.memberId)?.name ?? entry.memberId,
+          memberNickname: memberInfoById.get(entry.memberId)?.nickname ?? '',
           membershipType: memberInfoById.get(entry.memberId)?.membershipType ?? 'unknown',
         })),
       );
@@ -144,8 +157,10 @@ export function AttendancePage() {
 
     return logs.filter((entry) => {
       const byName = entry.memberName.toLowerCase().includes(searchValue);
+      const byNickname = entry.memberNickname.toLowerCase().includes(searchValue);
       const byId = entry.memberId.toLowerCase().includes(searchValue);
-      return byName || byId;
+      const byClass = entry.className.toLowerCase().includes(searchValue);
+      return byName || byNickname || byId || byClass;
     });
   }, [logs, searchTerm]);
 
@@ -163,7 +178,7 @@ export function AttendancePage() {
 
       <div className="panel">
         <label>
-          Search by member name or ID
+          Search by member name, nickname, ID, or class
           <input
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
@@ -193,6 +208,8 @@ export function AttendancePage() {
                   <th>Name</th>
                   <th>Check-in Date</th>
                   <th>Membership</th>
+                  <th>Class</th>
+                  <th>Class Time</th>
                   <th>Belt</th>
                   <th>Stripes</th>
                   <th>Sessions at Current Stripe</th>
@@ -201,9 +218,11 @@ export function AttendancePage() {
               <tbody>
                 {filteredLogs.map((entry) => (
                   <tr key={entry.id}>
-                    <td>{entry.memberName}</td>
+                    <td>{entry.memberName}{entry.memberNickname ? ` (${entry.memberNickname})` : ''}</td>
                     <td>{formatCheckInTime(entry.checkInTime)}</td>
                     <td>{entry.membershipType}</td>
+                    <td>{entry.className}{entry.isSubstitution ? ' (substitute)' : ''}</td>
+                    <td>{entry.classTime}</td>
                     <td>{entry.belt}</td>
                     <td>{entry.stripes ?? '?'}</td>
                     <td>{entry.attendanceLevel ?? '?'}</td>

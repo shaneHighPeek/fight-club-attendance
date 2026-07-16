@@ -18,18 +18,39 @@ import { Link } from 'react-router-dom';
 
 import { useAuth } from '../../auth/context';
 import { db, functions } from '../../services/firebase';
+import {
+  deriveAgeBandFromBirthDate,
+  getDefaultRankStep,
+  getRankStepById,
+  getRankStepsForAgeBand,
+  toLegacyRank,
+  toRankProfile,
+  type AgeBand,
+} from '../../config/rankSystem';
 import type { Belt, Member } from '../../types/member';
 
 const MAX_RESULTS = 15;
-const BELTS: Belt[] = ['white', 'blue', 'purple', 'brown', 'black'];
-const STRIPES: Array<0 | 1 | 2 | 3 | 4> = [0, 1, 2, 3, 4];
+const STATUS_OPTIONS: Array<{ value: Member['status']; label: string }> = [
+  { value: 'active', label: 'Active' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'stopped', label: 'Stopped' },
+  { value: 'temp', label: 'Temp' },
+  { value: 'null', label: 'NULL' },
+];
+
+const AGE_BANDS: Array<{ value: AgeBand; label: string }> = [
+  { value: 'under_8', label: 'Under 8' },
+  { value: 'youth_8_15', label: '8-15 (Youth)' },
+  { value: 'adult_16_plus', label: '16+ (Adult)' },
+];
 
 interface MemberRankHistory {
   id: string;
   fromBelt: Belt;
-  fromStripes: 0 | 1 | 2 | 3 | 4;
+  fromStripes: number;
   toBelt: Belt;
-  toStripes: 0 | 1 | 2 | 3 | 4;
+  toStripes: number;
   effectiveAt: Date;
   note?: string;
 }
@@ -37,7 +58,7 @@ interface MemberRankHistory {
 interface AttendanceLogSnapshot {
   checkInTime: Date;
   belt: Belt;
-  stripes: 0 | 1 | 2 | 3 | 4;
+  stripes: number;
 }
 
 interface RankPeriodRow {
@@ -77,12 +98,29 @@ function mapMember(docId: string, data: Record<string, unknown>): Member {
     memberNumber: typeof data.memberNumber === 'string' ? data.memberNumber : docId,
     firstName: typeof data.firstName === 'string' ? data.firstName : 'Unknown',
     lastName: typeof data.lastName === 'string' ? data.lastName : 'Member',
+    nickname: typeof data.nickname === 'string' ? data.nickname : undefined,
     phone: typeof data.phone === 'string' ? data.phone : '',
     email: typeof data.email === 'string' ? data.email : undefined,
+    birthDate: typeof data.birthDate === 'string' ? data.birthDate : undefined,
+    ageBand:
+      data.ageBand === 'under_8' || data.ageBand === 'youth_8_15' || data.ageBand === 'adult_16_plus'
+        ? data.ageBand
+        : undefined,
+    rankProfile:
+      typeof data.rankProfile === 'object' && data.rankProfile !== null
+        ? (data.rankProfile as Member['rankProfile'])
+        : undefined,
     status:
-      data.status === 'active' || data.status === 'inactive' || data.status === 'suspended'
+      data.status === 'active' ||
+      data.status === 'pending' ||
+      data.status === 'failed' ||
+      data.status === 'stopped' ||
+      data.status === 'temp' ||
+      data.status === 'null' ||
+      data.status === 'inactive' ||
+      data.status === 'suspended'
         ? data.status
-        : 'active',
+        : 'null',
     membershipType: typeof data.membershipType === 'string' ? data.membershipType : 'unknown',
     waiverAcceptedAt,
     waiverDisclaimerVersion: typeof data.waiverDisclaimerVersion === 'string' ? data.waiverDisclaimerVersion : undefined,
@@ -102,11 +140,42 @@ function formatPeriod(start: Date, end?: Date | null) {
 }
 
 function isBelt(value: unknown): value is Belt {
-  return value === 'white' || value === 'blue' || value === 'purple' || value === 'brown' || value === 'black';
+  return typeof value === 'string' && value.length > 0;
 }
 
-function isStripes(value: unknown): value is 0 | 1 | 2 | 3 | 4 {
-  return value === 0 || value === 1 || value === 2 || value === 3 || value === 4;
+function isStripes(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function normalizeColour(value: string | undefined): string {
+  return (value ?? '').toLowerCase().replace(/\s+/g, '_').replace(/\//g, '_');
+}
+
+function deriveRankStepId(member: Member, ageBand: AgeBand): string {
+  if (member.rankProfile?.rankStepId && getRankStepById(member.rankProfile.rankStepId)) {
+    return member.rankProfile.rankStepId;
+  }
+
+  const rank = member.rank;
+  const steps = getRankStepsForAgeBand(ageBand);
+  if (!rank) {
+    return getDefaultRankStep(ageBand).id;
+  }
+
+  const desiredBelt = normalizeColour(rank.belt);
+  const desiredDegree = typeof rank.stripes === 'number' ? rank.stripes : 0;
+
+  const exact = steps.find((step) => normalizeColour(step.baseColour) === desiredBelt && step.degreeLevel === desiredDegree);
+  if (exact) {
+    return exact.id;
+  }
+
+  const byBase = steps.find((step) => normalizeColour(step.baseColour) === desiredBelt);
+  if (byBase) {
+    return byBase.id;
+  }
+
+  return getDefaultRankStep(ageBand).id;
 }
 
 export function MembersPage() {
@@ -121,8 +190,10 @@ export function MembersPage() {
   const [savingRank, setSavingRank] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [newBelt, setNewBelt] = useState<Belt>('white');
-  const [newStripes, setNewStripes] = useState<0 | 1 | 2 | 3 | 4>(0);
+  const [selectedAgeBand, setSelectedAgeBand] = useState<AgeBand>('adult_16_plus');
+  const [selectedRankStepId, setSelectedRankStepId] = useState<string>('');
+  const [selectedStatus, setSelectedStatus] = useState<Member['status']>('active');
+  const [selectedNickname, setSelectedNickname] = useState('');
   const [changeNote, setChangeNote] = useState('');
   const [staffEmailToLink, setStaffEmailToLink] = useState('');
   const [linkingStaff, setLinkingStaff] = useState(false);
@@ -131,6 +202,7 @@ export function MembersPage() {
   const [linkingWaiverId, setLinkingWaiverId] = useState<string | null>(null);
 
   const canEditRank = role === 'admin' || role === 'manager';
+  const rankOptions = useMemo(() => getRankStepsForAgeBand(selectedAgeBand), [selectedAgeBand]);
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -150,6 +222,7 @@ export function MembersPage() {
       const membersCollection = collection(db, 'members');
       const byId = new Map<string, Member>();
       const inputLower = input.toLowerCase();
+      const inputUpper = input.toUpperCase();
 
       const lastNameQuery = query(
         membersCollection,
@@ -164,12 +237,44 @@ export function MembersPage() {
         byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
       }
 
+      const nicknameQuery = query(
+        membersCollection,
+        orderBy('nicknameLower'),
+        startAt(inputLower),
+        endAt(`${inputLower}\uf8ff`),
+        limit(MAX_RESULTS),
+      );
+      const nicknameSnapshot = await getDocs(nicknameQuery);
+      for (const docSnap of nicknameSnapshot.docs) {
+        byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
+      }
+
+      const memberNumberQuery = query(membersCollection, where('memberNumber', '==', inputUpper), limit(MAX_RESULTS));
+      const memberNumberSnapshot = await getDocs(memberNumberQuery);
+      for (const docSnap of memberNumberSnapshot.docs) {
+        byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
+      }
+
       const normalizedPhone = normalizePhone(input);
       if (normalizedPhone.length >= 3) {
-        const phoneQuery = query(membersCollection, where('phone', '==', normalizedPhone), limit(MAX_RESULTS));
+        const phoneQuery = query(membersCollection, where('phone', '==', input), limit(MAX_RESULTS));
         const phoneSnapshot = await getDocs(phoneQuery);
         for (const docSnap of phoneSnapshot.docs) {
           byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
+        }
+      }
+
+      // Fallback scan for imported records missing lastNameLower / firstNameLower fields.
+      const fallbackScan = await getDocs(query(membersCollection, limit(500)));
+      for (const docSnap of fallbackScan.docs) {
+        const mapped = mapMember(docSnap.id, docSnap.data());
+        const firstNameMatches = mapped.firstName.toLowerCase().includes(inputLower);
+        const lastNameMatches = mapped.lastName.toLowerCase().includes(inputLower);
+        const nicknameMatches = (mapped.nickname ?? '').toLowerCase().includes(inputLower);
+        const memberNumberMatches = mapped.memberNumber.toUpperCase().includes(inputUpper);
+        const phoneMatches = normalizedPhone.length >= 3 && normalizePhone(mapped.phone).includes(normalizedPhone);
+        if (firstNameMatches || lastNameMatches || nicknameMatches || memberNumberMatches || phoneMatches) {
+          byId.set(docSnap.id, mapped);
         }
       }
 
@@ -301,10 +406,13 @@ export function MembersPage() {
       setLinkedStaff(nextLinkedStaff);
       setWaiverCandidates(nextWaiverCandidates);
       setSelectedMember(effectiveMember);
-      const currentBelt = effectiveMember.rank?.belt ?? 'white';
-      const currentStripes = effectiveMember.rank?.stripes ?? 0;
-      setNewBelt(currentBelt);
-      setNewStripes(currentStripes);
+      const ageBand = effectiveMember.rankProfile?.ageBand ?? effectiveMember.ageBand ?? deriveAgeBandFromBirthDate(effectiveMember.birthDate);
+      const stepId = deriveRankStepId(effectiveMember, ageBand);
+      const step = getRankStepById(stepId) ?? getDefaultRankStep(ageBand);
+      setSelectedAgeBand(ageBand);
+      setSelectedRankStepId(step.id);
+      setSelectedStatus(effectiveMember.status);
+      setSelectedNickname(effectiveMember.nickname ?? '');
       setChangeNote('');
       setStaffEmailToLink('');
     } catch (timelineError) {
@@ -315,6 +423,7 @@ export function MembersPage() {
       setLinkedStaff([]);
       setWaiverCandidates([]);
       setSelectedMember(member);
+      setSelectedNickname(member.nickname ?? '');
     } finally {
       setLoadingTimeline(false);
     }
@@ -325,10 +434,15 @@ export function MembersPage() {
       return;
     }
 
-    const currentBelt = selectedMember.rank?.belt ?? 'white';
-    const currentStripes = selectedMember.rank?.stripes ?? 0;
-    if (currentBelt === newBelt && currentStripes === newStripes) {
-      setSaveMessage('No rank change to save.');
+    const currentAgeBand = selectedMember.rankProfile?.ageBand ?? selectedMember.ageBand ?? deriveAgeBandFromBirthDate(selectedMember.birthDate);
+    const currentStepId = selectedMember.rankProfile?.rankStepId ?? deriveRankStepId(selectedMember, currentAgeBand);
+    const rankChanged = !(currentAgeBand === selectedAgeBand && currentStepId === selectedRankStepId);
+    const statusChanged = selectedMember.status !== selectedStatus;
+    const normalizedNickname = selectedNickname.trim();
+    const nicknameChanged = (selectedMember.nickname ?? '') !== normalizedNickname;
+
+    if (!rankChanged && !statusChanged && !nicknameChanged) {
+      setSaveMessage('No member changes to save.');
       return;
     }
 
@@ -344,52 +458,103 @@ export function MembersPage() {
         }
 
         const memberData = memberSnapshot.data() as Record<string, unknown>;
-        const rank = memberData.rank as Record<string, unknown> | undefined;
-        const fromBelt = isBelt(rank?.belt) ? rank.belt : 'white';
-        const fromStripes = isStripes(rank?.stripes) ? rank.stripes : 0;
         const now = Timestamp.now();
-        const historyRef = doc(collection(db, 'memberRankHistory'));
-
-        transaction.update(memberRef, {
-          rank: {
-            belt: newBelt,
-            stripes: newStripes,
-          },
+        const updates: Record<string, unknown> = {
+          status: selectedStatus,
+          nickname: normalizedNickname || null,
+          nicknameLower: normalizedNickname ? normalizedNickname.toLowerCase() : null,
           updatedAt: now,
-        });
+        };
 
-        transaction.set(historyRef, {
-          memberId: selectedMember.id,
-          fromBelt,
-          fromStripes,
-          toBelt: newBelt,
-          toStripes: newStripes,
-          effectiveAt: now,
-          note: changeNote.trim(),
-          changedByUid: user?.uid ?? null,
-          changedByEmail: user?.email ?? null,
-          createdAt: now,
-        });
+        if (rankChanged) {
+          const rank = memberData.rank as Record<string, unknown> | undefined;
+          const fromBelt = isBelt(rank?.belt) ? rank.belt : 'white';
+          const fromStripes = isStripes(rank?.stripes) ? rank.stripes : 0;
+          const fromAgeBand =
+            memberData.ageBand === 'under_8' || memberData.ageBand === 'youth_8_15' || memberData.ageBand === 'adult_16_plus'
+              ? (memberData.ageBand as AgeBand)
+              : deriveAgeBandFromBirthDate(typeof memberData.birthDate === 'string' ? memberData.birthDate : selectedMember.birthDate);
+
+          const fromRankProfile =
+            typeof memberData.rankProfile === 'object' && memberData.rankProfile !== null
+              ? (memberData.rankProfile as Member['rankProfile'])
+              : null;
+
+          const targetStep = getRankStepById(selectedRankStepId) ?? getDefaultRankStep(selectedAgeBand);
+          const targetRankProfile = toRankProfile(targetStep);
+          const targetLegacyRank = toLegacyRank(targetRankProfile);
+          const historyRef = doc(collection(db, 'memberRankHistory'));
+
+          updates.ageBand = selectedAgeBand;
+          updates.rankProfile = targetRankProfile;
+          updates.rank = {
+            belt: targetLegacyRank.belt,
+            stripes: targetLegacyRank.stripes,
+          };
+
+          transaction.set(historyRef, {
+            memberId: selectedMember.id,
+            fromBelt,
+            fromStripes,
+            toBelt: targetLegacyRank.belt,
+            toStripes: targetLegacyRank.stripes,
+            fromAgeBand,
+            toAgeBand: selectedAgeBand,
+            fromRankStepId: fromRankProfile?.rankStepId ?? null,
+            toRankStepId: targetRankProfile.rankStepId,
+            fromBeltName: fromRankProfile?.beltName ?? fromBelt,
+            toBeltName: targetRankProfile.beltName,
+            toDegreeLevel: targetRankProfile.degreeLevel,
+            effectiveAt: now,
+            note: changeNote.trim(),
+            changedByUid: user?.uid ?? null,
+            changedByEmail: user?.email ?? null,
+            createdAt: now,
+          });
+        }
+
+        transaction.update(memberRef, updates);
       });
 
-      const updatedMember: Member = {
+      let updatedMember: Member = {
         ...selectedMember,
-        rank: {
-          belt: newBelt,
-          stripes: newStripes,
-        },
+        status: selectedStatus,
+        nickname: normalizedNickname || undefined,
       };
+
+      if (rankChanged) {
+        const targetStep = getRankStepById(selectedRankStepId) ?? getDefaultRankStep(selectedAgeBand);
+        const targetRankProfile = toRankProfile(targetStep);
+        const targetLegacyRank = toLegacyRank(targetRankProfile);
+        updatedMember = {
+          ...updatedMember,
+          ageBand: selectedAgeBand,
+          rankProfile: targetRankProfile,
+          rank: {
+            belt: targetLegacyRank.belt,
+            stripes: targetLegacyRank.stripes,
+          },
+        };
+      }
+
       setSelectedMember(updatedMember);
       setMembers((previous) => previous.map((entry) => (entry.id === updatedMember.id ? updatedMember : entry)));
       await loadMemberTimeline(updatedMember);
-      setSaveMessage('Rank updated and history recorded.');
+      if (rankChanged) {
+        setSaveMessage('Member status, nickname, and rank changes saved.');
+      } else if (statusChanged || nicknameChanged) {
+        setSaveMessage('Member status and nickname updated.');
+      } else {
+        setSaveMessage('Member updated.');
+      }
     } catch (saveError) {
       console.error(saveError);
-      setError('Failed to save rank change.');
+      setError('Failed to save member changes.');
     } finally {
       setSavingRank(false);
     }
   }
+
 
   async function handleLinkStaffUser() {
     if (!selectedMember || !staffEmailToLink.trim() || linkingStaff) {
@@ -475,7 +640,7 @@ export function MembersPage() {
   return (
     <main className="page page-admin">
       <h1>Members</h1>
-      <p>Search a member, update belt/stripes, and review rank progression attendance.</p>
+      <p>Search a member, update age-band rank step, and review rank progression attendance.</p>
 
       <div className="actions">
         <Link to="/admin">Back</Link>
@@ -483,11 +648,11 @@ export function MembersPage() {
 
       <form className="panel" onSubmit={handleSearch}>
         <label>
-          Search by last name or phone
+          Search by last name, first name, nickname, or phone
           <input
             value={term}
             onChange={(event) => setTerm(event.target.value)}
-            placeholder="e.g. Anderson or 0400123456"
+            placeholder="e.g. Anderson / Shane / Rocky / 0400123456"
             minLength={2}
             required
           />
@@ -506,7 +671,7 @@ export function MembersPage() {
           <div className="actions">
             {members.map((member) => (
               <button key={member.id} className="button button-secondary" type="button" onClick={() => void loadMemberTimeline(member)}>
-                {member.firstName} {member.lastName} ({member.memberNumber})
+                {member.firstName} {member.lastName}{member.nickname ? ` (${member.nickname})` : ''} ({member.memberNumber})
               </button>
             ))}
           </div>
@@ -519,30 +684,73 @@ export function MembersPage() {
             {selectedMember.firstName} {selectedMember.lastName}
           </h2>
           <p>
-            Current rank: {selectedMember.rank?.belt ?? 'white'} {selectedMember.rank?.stripes ?? 0} stripes
+            Nickname: {selectedMember.nickname ? selectedMember.nickname : 'None set'}
+          </p>
+          <p>
+            Current rank: {selectedMember.rankProfile?.beltName ?? selectedMember.rank?.belt ?? 'white'}
+            {' '}({String(selectedMember.rankProfile?.degreeLevel ?? selectedMember.rank?.stripes ?? 0)})
+            {' '}| Age band: {selectedMember.rankProfile?.ageBand ?? selectedMember.ageBand ?? 'adult_16_plus'}
           </p>
           {!canEditRank ? <p>Rank edits require admin or manager role.</p> : null}
           <div className="actions">
             <label>
-              Belt
-              <select value={newBelt} onChange={(event) => setNewBelt(event.target.value as Belt)} disabled={!canEditRank || savingRank}>
-                {BELTS.map((belt) => (
-                  <option key={belt} value={belt}>
-                    {belt}
+              Nickname
+              <input
+                value={selectedNickname}
+                onChange={(event) => setSelectedNickname(event.target.value)}
+                disabled={!canEditRank || savingRank}
+                placeholder="Optional"
+              />
+            </label>
+            <label>
+              Member status
+              <select
+                value={selectedStatus}
+                onChange={(event) => setSelectedStatus(event.target.value as Member['status'])}
+                disabled={!canEditRank || savingRank}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              Stripes
+              Age band
               <select
-                value={newStripes}
-                onChange={(event) => setNewStripes(Number(event.target.value) as 0 | 1 | 2 | 3 | 4)}
+                value={selectedAgeBand}
+                onChange={(event) => {
+                  const nextAgeBand = event.target.value as AgeBand;
+                  const nextDefault = getDefaultRankStep(nextAgeBand);
+                  setSelectedAgeBand(nextAgeBand);
+                  setSelectedRankStepId(nextDefault.id);
+                }}
                 disabled={!canEditRank || savingRank}
               >
-                {STRIPES.map((stripes) => (
-                  <option key={stripes} value={stripes}>
-                    {stripes}
+                {AGE_BANDS.map((band) => (
+                  <option key={band.value} value={band.value}>
+                    {band.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Rank step
+              <select
+                value={selectedRankStepId}
+                onChange={(event) => {
+                  const nextStep = getRankStepById(event.target.value);
+                  if (!nextStep) {
+                    return;
+                  }
+                  setSelectedRankStepId(nextStep.id);
+                }}
+                disabled={!canEditRank || savingRank}
+              >
+                {rankOptions.map((step) => (
+                  <option key={step.id} value={step.id}>
+                    {step.rankOrder}. {step.beltName} ({String(step.degreeLevel)})
                   </option>
                 ))}
               </select>
@@ -560,7 +768,7 @@ export function MembersPage() {
           </label>
           <div className="actions">
             <button className="button" type="button" onClick={() => void handleSaveRank()} disabled={!canEditRank || savingRank}>
-              {savingRank ? 'Saving...' : 'Save Rank Change'}
+              {savingRank ? 'Saving...' : 'Save Member Changes'}
             </button>
           </div>
         </div>

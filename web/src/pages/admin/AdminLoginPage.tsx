@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { sendPasswordResetEmail, signInWithEmailAndPassword } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
 
 import { auth } from '../../services/firebase';
@@ -9,11 +9,14 @@ export function AdminLoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [sendingReset, setSendingReset] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setMessage(null);
     setSubmitting(true);
 
     try {
@@ -24,6 +27,28 @@ export function AdminLoginPage() {
       console.error(err);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleSendResetEmail() {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError('Enter your admin email first, then use reset password.');
+      setMessage(null);
+      return;
+    }
+
+    setSendingReset(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      setMessage('Password reset email sent. Check your inbox and spam folder.');
+    } catch (err) {
+      setError('Could not send reset email. Verify the email and try again.');
+      console.error(err);
+    } finally {
+      setSendingReset(false);
     }
   }
 
@@ -42,7 +67,11 @@ export function AdminLoginPage() {
         <button className="button" type="submit" disabled={submitting}>
           {submitting ? 'Signing in...' : 'Sign In'}
         </button>
+        <button className="button button-secondary" type="button" onClick={() => void handleSendResetEmail()} disabled={sendingReset}>
+          {sendingReset ? 'Sending reset...' : 'Forgot Password'}
+        </button>
         {error ? <p className="error">{error}</p> : null}
+        {message ? <p>{message}</p> : null}
       </form>
     </main>
   );

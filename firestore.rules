@@ -40,10 +40,15 @@ service cloud.firestore {
         "totalCheckIns",
         "waiverAcceptedAt",
         "waiverDisclaimerVersion",
-        "updatedAt"
+        "updatedAt",
+        "status"
       ]) &&
       request.resource.data.lastCheckIn is timestamp &&
       request.resource.data.updatedAt is timestamp &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["status"]) ||
+        request.resource.data.status is string
+      ) &&
       request.resource.data.totalCheckIns is int &&
       (
         !request.resource.data.diff(resource.data).affectedKeys().hasAny(["streakCurrentWeeks"]) ||
@@ -86,14 +91,31 @@ service cloud.firestore {
       return isSignedIn() &&
       request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         "rank",
+        "rankProfile",
+        "ageBand",
         "updatedAt"
       ]) &&
       request.resource.data.rank is map &&
       request.resource.data.rank.belt is string &&
       request.resource.data.rank.stripes is int &&
       request.resource.data.rank.stripes >= 0 &&
-      request.resource.data.rank.stripes <= 4 &&
-      request.resource.data.updatedAt is timestamp;
+      request.resource.data.rank.stripes <= 10 &&
+      request.resource.data.updatedAt is timestamp &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["ageBand"]) ||
+        request.resource.data.ageBand is string
+      ) &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["rankProfile"]) ||
+        (
+          request.resource.data.rankProfile is map &&
+          request.resource.data.rankProfile.rankStepId is string &&
+          request.resource.data.rankProfile.rankStepOrder is int &&
+          request.resource.data.rankProfile.rankSystem is string &&
+          request.resource.data.rankProfile.beltName is string &&
+          request.resource.data.rankProfile.baseColour is string
+        )
+      );
     }
 
     match /members/{memberId} {
@@ -125,6 +147,17 @@ service cloud.firestore {
     match /webhookEvents/{eventId} {
       allow read: if isCoachOrAdmin();
       allow write: if false;
+    }
+
+    match /classOverrides/{overrideId} {
+      // The kiosk is intentionally unauthenticated and needs today's effective schedule.
+      allow read: if true;
+      allow create, update, delete: if isCoachOrAdmin();
+    }
+
+    match /settings/classSchedule {
+      allow read: if true;
+      allow write: if isAdmin() || isBootstrapAdmin() || isManager();
     }
 
     match /settings/{settingId} {

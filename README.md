@@ -5,7 +5,7 @@ Web-based attendance and check-in system for Fight Club martial arts gym.
 ## Current Repository Structure
 
 ```text
-windsurf-project/
+fight-club-app/
 ├── docs/
 ├── web/                     # React + Vite frontend
 ├── functions/               # Firebase Functions (TypeScript)

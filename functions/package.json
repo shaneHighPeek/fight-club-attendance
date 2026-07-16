@@ -9,6 +9,8 @@
     "build": "tsc",
     "build:watch": "tsc --watch",
     "lint": "eslint --ext .ts src",
+    "backfill:nickname-lower": "npm run build && node lib/backfillNicknameLower.js",
+    "backfill:nickname-lower:apply": "npm run build && node lib/backfillNicknameLower.js --apply",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell"
   },

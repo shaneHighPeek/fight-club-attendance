@@ -2,8 +2,11 @@ import { Timestamp, collection, doc, getDoc, increment, runTransaction, serverTi
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
+import { ClassSessionSelect } from '../../components/ClassSessionSelect';
+import { deriveAgeBandFromBirthDate, getDefaultRankStep, getRankStepById, toLegacyRank, toRankProfile } from '../../config/rankSystem';
 import { WAIVER_VALIDITY_DAYS, WAIVER_VERSION } from '../../config/waiver';
 import { db } from '../../services/firebase';
+import type { AttendanceClassSnapshot } from '../../types/classSchedule';
 import type { Member } from '../../types/member';
 
 interface ConfirmState {
@@ -62,6 +65,7 @@ export function ConfirmCheckInPage() {
   const [error, setError] = useState<string | null>(null);
   const [waiverLoading, setWaiverLoading] = useState(false);
   const [requiresWaiverAck, setRequiresWaiverAck] = useState(false);
+  const [selectedClass, setSelectedClass] = useState<AttendanceClassSnapshot | null>(null);
 
   useEffect(() => {
     async function loadWaiverStatus() {
@@ -124,9 +128,25 @@ export function ConfirmCheckInPage() {
           typeof memberData.rank === 'object' && memberData.rank !== null
             ? (memberData.rank as Record<string, unknown>)
             : null;
-        const belt = typeof docRank?.belt === 'string' ? docRank.belt : member.rank?.belt ?? 'white';
+        const memberRankProfileRaw =
+          typeof memberData.rankProfile === 'object' && memberData.rankProfile !== null
+            ? (memberData.rankProfile as Record<string, unknown>)
+            : null;
+        const ageBand =
+          memberData.ageBand === 'under_8' || memberData.ageBand === 'youth_8_15' || memberData.ageBand === 'adult_16_plus'
+            ? memberData.ageBand
+            : deriveAgeBandFromBirthDate(typeof memberData.birthDate === 'string' ? memberData.birthDate : member.birthDate);
+        const fallbackStep = getDefaultRankStep(ageBand);
+        const fallbackProfile = toRankProfile(fallbackStep);
+        const resolvedStep =
+          typeof memberRankProfileRaw?.rankStepId === 'string'
+            ? getRankStepById(memberRankProfileRaw.rankStepId)
+            : null;
+        const rankProfile = resolvedStep ? toRankProfile(resolvedStep) : fallbackProfile;
+        const legacyRank = toLegacyRank(rankProfile);
+        const belt = typeof docRank?.belt === 'string' ? docRank.belt : member.rank?.belt ?? legacyRank.belt;
         const stripes =
-          typeof docRank?.stripes === 'number' ? docRank.stripes : (member.rank?.stripes ?? 0);
+          typeof docRank?.stripes === 'number' ? docRank.stripes : (member.rank?.stripes ?? legacyRank.stripes);
         const rankAtCheckIn = { belt, stripes };
         const rankAttendanceKey = `${belt}_${stripes}`;
         const rankAttendance =
@@ -173,10 +193,12 @@ export function ConfirmCheckInPage() {
           status: 'completed',
           locationId: 'ashmore',
           memberRankAtCheckIn: rankAtCheckIn,
+          memberRankProfileAtCheckIn: rankProfile,
           attendanceLevel,
           streakWeeksAtCheckIn: streakCurrentWeeks,
           daysSinceLastCheckIn: daysAway,
           returningAfterBreak: daysAway >= COMEBACK_THRESHOLD_DAYS,
+          classSession: selectedClass,
           createdAt: timestamp,
         });
 
@@ -231,6 +253,11 @@ export function ConfirmCheckInPage() {
         <p>
           <strong>Name:</strong> {member.firstName} {member.lastName}
         </p>
+        {member.nickname ? (
+          <p>
+            <strong>Nickname:</strong> {member.nickname}
+          </p>
+        ) : null}
         <p>
           <strong>Member #:</strong> {member.memberNumber}
         </p>
@@ -241,9 +268,10 @@ export function ConfirmCheckInPage() {
           <strong>Membership:</strong> {member.membershipType}
         </p>
         <p>
-          <strong>Rank:</strong> {member.rank ? `${member.rank.belt} (${member.rank.stripes} stripes)` : 'Not set'}
+          <strong>Rank:</strong> {member.rankProfile ? `${member.rankProfile.beltName} (${String(member.rankProfile.degreeLevel)})` : (member.rank ? `${member.rank.belt} (${member.rank.stripes} stripes)` : 'Not set')}
         </p>
       </div>
+      <ClassSessionSelect onSelectionChange={setSelectedClass} />
       <div className="actions">
         <button className="button" onClick={handleCheckIn} type="button" disabled={isSubmitting}>
           {isSubmitting ? 'Checking in...' : 'Check In'}

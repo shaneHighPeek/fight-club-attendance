@@ -1,7 +1,7 @@
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { HttpsError, onCall, onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions";
@@ -226,6 +226,61 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function readInboundString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("{{") && trimmed.endsWith("}}")) {
+    return null;
+  }
+  return trimmed;
+}
+
+function readInboundNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed || (trimmed.startsWith("{{") && trimmed.endsWith("}}"))) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+async function allocateMemberNumber(): Promise<string> {
+  const counterRef = db.collection("settings").doc("memberNumberCounter");
+  const nextValue = await db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(counterRef);
+    const data = snapshot.data() as Record<string, unknown> | undefined;
+    const current = typeof data?.nextValue === "number" && Number.isFinite(data.nextValue)
+      ? data.nextValue
+      : 1;
+
+    tx.set(
+      counterRef,
+      {
+        nextValue: current + 1,
+        updatedAt: Timestamp.now()
+      },
+      { merge: true }
+    );
+
+    return current;
+  });
+
+  return `ASH-${String(nextValue).padStart(6, "0")}`;
+}
+
 function buildMemberSnapshot(
   memberId: string | undefined,
   memberData: Record<string, unknown> | undefined
@@ -236,10 +291,15 @@ function buildMemberSnapshot(
 
   const firstName = typeof memberData.firstName === "string" ? memberData.firstName : "";
   const lastName = typeof memberData.lastName === "string" ? memberData.lastName : "";
+  const nickname = typeof memberData.nickname === "string" ? memberData.nickname : "";
   const rank =
     typeof memberData.rank === "object" && memberData.rank !== null
       ? (memberData.rank as Record<string, unknown>)
       : {};
+  const rankProfile =
+    typeof memberData.rankProfile === "object" && memberData.rankProfile !== null
+      ? (memberData.rankProfile as Record<string, unknown>)
+      : null;
 
   return {
     id: memberId,
@@ -247,6 +307,7 @@ function buildMemberSnapshot(
     memberNumber: readString(memberData.memberNumber) ?? memberId,
     firstName,
     lastName,
+    nickname,
     fullName: `${firstName} ${lastName}`.trim(),
     email: readString(memberData.email) ?? "",
     phone: readString(memberData.phone) ?? "",
@@ -255,10 +316,28 @@ function buildMemberSnapshot(
     hasCrmContactId: Boolean(readString(memberData.crmContactId) || readString(memberData.crmMemberId)),
     status: readString(memberData.status) ?? "active",
     membershipType: readString(memberData.membershipType) ?? "unknown",
+    birthDate: readString(memberData.birthDate),
+    ageBand: readString(memberData.ageBand),
+    // Preserve the original CRM contract. New rankProfile fields are additive.
     rank: {
       belt: readString(rank.belt) ?? "white",
       stripes: readNumber(rank.stripes) ?? 0
     },
+    rankProfile: rankProfile
+      ? {
+          ageBand: readString(rankProfile.ageBand),
+          rankSystem: readString(rankProfile.rankSystem),
+          rankStepId: readString(rankProfile.rankStepId),
+          rankStepOrder: readNumber(rankProfile.rankStepOrder),
+          beltName: readString(rankProfile.beltName),
+          baseColour: readString(rankProfile.baseColour),
+          stripeColour: readString(rankProfile.stripeColour),
+          degreeLevel:
+            typeof rankProfile.degreeLevel === "number" || typeof rankProfile.degreeLevel === "string"
+              ? rankProfile.degreeLevel
+              : null
+        }
+      : null,
     streak: {
       currentWeeks: readNumber(memberData.streakCurrentWeeks),
       bestWeeks: readNumber(memberData.streakBestWeeks),
@@ -553,6 +632,129 @@ export const subscriptionWebhook = onRequest(async (req, res) => {
   });
 });
 
+
+/**
+ * Inbound CRM member upsert webhook.
+ * Creates/updates member records from CRM using crmContactId as the primary external key.
+ */
+export const upsertMemberFromCrm = onRequest(async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "method_not_allowed" });
+    return;
+  }
+
+  const eventType = readInboundString(req.body?.eventType);
+  if (eventType && eventType !== "crm.member.upsert") {
+    res.status(400).json({ error: "invalid_event_type" });
+    return;
+  }
+
+  const payload = (req.body?.payload ?? {}) as Record<string, unknown>;
+  const eventId = readInboundString(req.body?.eventId) ?? readInboundString(payload.eventId);
+  if (eventId) {
+    const duplicate = await markInboundEventProcessed("crm-member-upsert", eventId);
+    if (duplicate) {
+      res.status(200).json({ ok: true, duplicate: true, eventId });
+      return;
+    }
+  }
+
+  const crmContactId = readInboundString(payload.crmContactId) ?? readInboundString(req.body?.crmContactId);
+  if (!crmContactId) {
+    res.status(400).json({ error: "crmContactId_required" });
+    return;
+  }
+
+  const firstName = readInboundString(payload.firstName) ?? "";
+  const lastName = readInboundString(payload.lastName) ?? "";
+  const nickname = readInboundString(payload.nickname) ?? "";
+  const email = readInboundString(payload.email) ?? "";
+  const phone = readInboundString(payload.phone) ?? "";
+  const membershipType = readInboundString(payload.membershipType) ?? "monthly";
+  const status = readInboundString(payload.status) ?? "active";
+
+  const ageBand = readInboundString(payload.ageBand) ?? "adult_16_plus";
+  const rankSystem = readInboundString(payload.rankSystem);
+  const rankStepId = readInboundString(payload.rankStepId);
+  const rankStepOrder = readInboundNumber(payload.rankStepOrder);
+  const beltName = readInboundString(payload.beltName);
+  const baseColour = readInboundString(payload.baseColour);
+  const stripeColour = readInboundString(payload.stripeColour);
+  const degreeLevelNumber = readInboundNumber(payload.degreeLevel);
+  const degreeLevelString = readInboundString(payload.degreeLevel);
+  const degreeLevel = degreeLevelNumber ?? degreeLevelString;
+
+  const rankProfile = {
+    ageBand,
+    rankSystem,
+    rankStepId,
+    rankStepOrder,
+    beltName,
+    baseColour,
+    stripeColour,
+    degreeLevel: degreeLevel ?? null
+  };
+
+  const legacyRank = {
+    belt: (baseColour ?? beltName ?? "white").toLowerCase().replace(/\s+/g, "_").replace(/\//g, "_"),
+    stripes: typeof degreeLevelNumber === "number" ? degreeLevelNumber : 0
+  };
+
+  let memberRef;
+  let operation: "created" | "updated" = "updated";
+
+  const byCrm = await db
+    .collection("members")
+    .where("crmContactId", "==", crmContactId)
+    .limit(1)
+    .get();
+
+  if (!byCrm.empty) {
+    memberRef = byCrm.docs[0].ref;
+  } else {
+    memberRef = db.collection("members").doc();
+    operation = "created";
+  }
+
+  const existingSnapshot = await memberRef.get();
+  const existingData = existingSnapshot.data() as Record<string, unknown> | undefined;
+  const existingMemberNumber = readString(existingData?.memberNumber);
+  const memberNumber = existingMemberNumber ?? await allocateMemberNumber();
+
+  await memberRef.set(
+    {
+      memberId: memberRef.id,
+      memberNumber,
+      firstName,
+      lastName,
+      nickname,
+      nicknameLower: nickname ? nickname.toLowerCase() : null,
+      email,
+      phone,
+      membershipType,
+      status,
+      ageBand,
+      rankProfile,
+      rank: legacyRank,
+      crmContactId,
+      crmMemberId: crmContactId,
+      sourceSystem: "hpp",
+      updatedAt: Timestamp.now(),
+      createdAt: existingData?.createdAt instanceof Timestamp ? existingData.createdAt : Timestamp.now()
+    },
+    { merge: true }
+  );
+
+  res.status(200).json({
+    ok: true,
+    eventType: "crm.member.upsert",
+    operation,
+    memberId: memberRef.id,
+    memberNumber,
+    crmContactId
+  });
+});
+
 /**
  * Inbound CRM link webhook.
  * Stores CRM contact ID on an existing member without changing subscription status.
@@ -743,6 +945,39 @@ export const onMemberCreated = onDocumentCreated("members/{memberId}", async (ev
   return;
 });
 
+
+/**
+ * Emits outbound event when member status changes via admin/profile updates.
+ */
+export const onMemberUpdated = onDocumentUpdated("members/{memberId}", async (event) => {
+  const beforeData = event.data?.before.data() as Record<string, unknown> | undefined;
+  const afterData = event.data?.after.data() as Record<string, unknown> | undefined;
+  const memberId = event.params.memberId;
+
+  if (!afterData) {
+    return;
+  }
+
+  const beforeStatus = readString(beforeData?.status) ?? "null";
+  const afterStatus = readString(afterData.status) ?? "null";
+
+  if (beforeStatus === afterStatus) {
+    return;
+  }
+
+  const member = buildMemberSnapshot(memberId, afterData);
+  await enqueueOutboundEvent(
+    "member.updated",
+    {
+      sourceEventType: "member.status_changed",
+      previousStatus: beforeStatus,
+      status: afterStatus,
+      member
+    },
+    memberId
+  );
+});
+
 /**
  * Emits outbound event when a waiver is signed.
  */
@@ -794,10 +1029,18 @@ export const onAttendanceCreated = onDocumentCreated("attendanceLogs/{logId}", a
   const type = typeof data.type === "string" ? data.type : "unknown";
   let memberData: Record<string, unknown> | undefined;
 
-  const rank =
+  const rankProfileAtCheckIn =
+    typeof data.memberRankProfileAtCheckIn === "object" && data.memberRankProfileAtCheckIn !== null
+      ? (data.memberRankProfileAtCheckIn as Record<string, unknown>)
+      : null;
+  const rankAtCheckIn =
     typeof data.memberRankAtCheckIn === "object" && data.memberRankAtCheckIn !== null
       ? (data.memberRankAtCheckIn as Record<string, unknown>)
       : {};
+  const classSession =
+    typeof data.classSession === "object" && data.classSession !== null
+      ? (data.classSession as Record<string, unknown>)
+      : null;
 
   const streakWeeks =
     typeof data.streakWeeksAtCheckIn === "number" ? data.streakWeeksAtCheckIn : undefined;
@@ -814,12 +1057,30 @@ export const onAttendanceCreated = onDocumentCreated("attendanceLogs/{logId}", a
     locationId: typeof data.locationId === "string" ? data.locationId : "unknown",
     status: typeof data.status === "string" ? data.status : "completed",
     attendanceLevel: typeof data.attendanceLevel === "number" ? data.attendanceLevel : null,
-    belt: typeof rank.belt === "string" ? rank.belt : null,
-    stripes: typeof rank.stripes === "number" ? rank.stripes : null,
+    // Preserve the original flat/structured attendance fields for existing CRM mappings.
+    belt: typeof rankAtCheckIn.belt === "string" ? rankAtCheckIn.belt : null,
+    stripes: typeof rankAtCheckIn.stripes === "number" ? rankAtCheckIn.stripes : null,
     streakWeeksAtCheckIn: streakWeeks ?? null,
     daysSinceLastCheckIn:
       typeof data.daysSinceLastCheckIn === "number" ? data.daysSinceLastCheckIn : null,
-    returningAfterBreak: data.returningAfterBreak === true
+    returningAfterBreak: data.returningAfterBreak === true,
+    rankSystemAtCheckIn: rankProfileAtCheckIn ? readString(rankProfileAtCheckIn.rankSystem) : null,
+    rankStepIdAtCheckIn: rankProfileAtCheckIn ? readString(rankProfileAtCheckIn.rankStepId) : null,
+    rankStepOrderAtCheckIn: rankProfileAtCheckIn ? readNumber(rankProfileAtCheckIn.rankStepOrder) : null,
+    beltNameAtCheckIn: rankProfileAtCheckIn ? readString(rankProfileAtCheckIn.beltName) : null,
+    baseColourAtCheckIn: rankProfileAtCheckIn ? readString(rankProfileAtCheckIn.baseColour) : null,
+    stripeColourAtCheckIn: rankProfileAtCheckIn ? readString(rankProfileAtCheckIn.stripeColour) : null,
+    degreeLevelAtCheckIn:
+      rankProfileAtCheckIn && (typeof rankProfileAtCheckIn.degreeLevel === "number" || typeof rankProfileAtCheckIn.degreeLevel === "string")
+        ? rankProfileAtCheckIn.degreeLevel
+        : null,
+    className: classSession ? readString(classSession.actualClassName) : null,
+    classStartTime: classSession ? readString(classSession.startTime) : null,
+    classEndTime: classSession ? readString(classSession.endTime) : null,
+    classDate: classSession ? readString(classSession.classDate) : null,
+    scheduledClassName: classSession ? readString(classSession.scheduledClassName) : null,
+    classSubstitution: classSession?.isSubstitution === true,
+    classSession
   };
 
   // Single consolidated temp onboarding event:
@@ -890,6 +1151,19 @@ export const onAttendanceCreated = onDocumentCreated("attendanceLogs/{logId}", a
       streakWeeksAtCheckIn: attendancePayload.streakWeeksAtCheckIn,
       daysSinceLastCheckIn: attendancePayload.daysSinceLastCheckIn,
       returningAfterBreak: attendancePayload.returningAfterBreak,
+      rankSystemAtCheckIn: attendancePayload.rankSystemAtCheckIn,
+      rankStepIdAtCheckIn: attendancePayload.rankStepIdAtCheckIn,
+      rankStepOrderAtCheckIn: attendancePayload.rankStepOrderAtCheckIn,
+      beltNameAtCheckIn: attendancePayload.beltNameAtCheckIn,
+      baseColourAtCheckIn: attendancePayload.baseColourAtCheckIn,
+      stripeColourAtCheckIn: attendancePayload.stripeColourAtCheckIn,
+      degreeLevelAtCheckIn: attendancePayload.degreeLevelAtCheckIn,
+      className: attendancePayload.className,
+      classStartTime: attendancePayload.classStartTime,
+      classEndTime: attendancePayload.classEndTime,
+      classDate: attendancePayload.classDate,
+      scheduledClassName: attendancePayload.scheduledClassName,
+      classSubstitution: attendancePayload.classSubstitution,
       // Stable structured blocks for CRM routing/storage.
       member: memberSnapshotPayload,
       attendance: attendancePayload,
@@ -952,11 +1226,22 @@ export const onMemberRankChanged = onDocumentCreated(
       {
         historyId: snapshot.id,
         effectiveAt: toIsoDate(data.effectiveAt),
+        // Preserve the original rank-change payload fields alongside the expanded model.
         fromBelt: typeof data.fromBelt === "string" ? data.fromBelt : null,
         fromStripes: typeof data.fromStripes === "number" ? data.fromStripes : null,
         toBelt: typeof data.toBelt === "string" ? data.toBelt : null,
         toStripes: typeof data.toStripes === "number" ? data.toStripes : null,
         note: typeof data.note === "string" ? data.note : "",
+        fromAgeBand: typeof data.fromAgeBand === "string" ? data.fromAgeBand : null,
+        toAgeBand: typeof data.toAgeBand === "string" ? data.toAgeBand : null,
+        fromRankStepId: typeof data.fromRankStepId === "string" ? data.fromRankStepId : null,
+        toRankStepId: typeof data.toRankStepId === "string" ? data.toRankStepId : null,
+        fromBeltName: typeof data.fromBeltName === "string" ? data.fromBeltName : null,
+        toBeltName: typeof data.toBeltName === "string" ? data.toBeltName : null,
+        toDegreeLevel:
+          typeof data.toDegreeLevel === "number" || typeof data.toDegreeLevel === "string"
+            ? data.toDegreeLevel
+            : null,
         member
       },
       memberId
@@ -1105,6 +1390,55 @@ export const createStaffUser = onCall(async (request) => {
     uid: userRecord.uid,
     email,
     role
+  };
+});
+
+/**
+ * Resets password for an existing Firebase Auth user.
+ * Admin-only recovery action from staff settings.
+ */
+export const setStaffPassword = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign-in required.");
+  }
+
+  const callerRole = request.auth.token.role;
+  const callerEmail = request.auth.token.email;
+  const canResetPassword =
+    callerRole === "admin" ||
+    (typeof callerEmail === "string" && BOOTSTRAP_ADMIN_EMAILS.has(callerEmail.toLowerCase()));
+
+  if (!canResetPassword) {
+    throw new HttpsError("permission-denied", "Admin role required.");
+  }
+
+  const emailRaw = request.data?.email;
+  const newPasswordRaw = request.data?.newPassword;
+  if (typeof emailRaw !== "string" || typeof newPasswordRaw !== "string") {
+    throw new HttpsError("invalid-argument", "email and newPassword are required.");
+  }
+
+  const email = emailRaw.trim().toLowerCase();
+  const newPassword = newPasswordRaw.trim();
+  if (!email || newPassword.length < 6) {
+    throw new HttpsError("invalid-argument", "Invalid email or new password.");
+  }
+
+  const userRecord = await adminAuth.getUserByEmail(email);
+  await adminAuth.updateUser(userRecord.uid, {
+    password: newPassword
+  });
+
+  logger.info("Staff password reset", {
+    targetUid: userRecord.uid,
+    targetEmail: email,
+    resetBy: request.auth.uid
+  });
+
+  return {
+    ok: true,
+    uid: userRecord.uid,
+    email
   };
 });
 

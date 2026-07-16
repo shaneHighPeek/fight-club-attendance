@@ -180,6 +180,65 @@ p {
   gap: 8px;
 }
 
+.schedule-time-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.section-divider {
+  height: 1px;
+  margin: 10px 0;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.button-warning {
+  background: linear-gradient(135deg, #d97706, #9a4f04);
+  box-shadow: 0 10px 22px rgba(217, 119, 6, 0.28);
+}
+
+.permanent-warning {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(255, 180, 80, 0.62);
+  border-radius: 14px;
+  background: rgba(154, 79, 4, 0.2);
+}
+
+.schedule-editor-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.schedule-editor-header label {
+  min-width: 220px;
+}
+
+.permanent-save-note {
+  padding: 12px;
+  border-left: 4px solid #d97706;
+  color: #ffe4b5;
+  background: rgba(217, 119, 6, 0.12);
+}
+
+.schedule-table input,
+.schedule-table select {
+  min-width: 120px;
+}
+
+.schedule-table td:nth-child(3) input {
+  min-width: 260px;
+}
+
+.success {
+  color: #8ce99a;
+  font-weight: 700;
+}
+
 .signature-pad {
   width: 100%;
   max-width: 560px;
@@ -398,5 +457,9 @@ a {
     font-size: 1.05rem;
     justify-content: center;
     text-align: center;
+  }
+
+  .schedule-time-grid {
+    grid-template-columns: 1fr;
   }
 }

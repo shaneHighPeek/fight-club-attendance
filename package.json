@@ -11,10 +11,10 @@
     "build": "npm run build:web && npm run build:functions",
     "lint": "npm run lint:web && npm run lint:functions",
     "emulators": "firebase emulators:start",
+    "emulators:backend": "firebase emulators:start --only auth,firestore,functions",
     "emulators:web": "firebase emulators:start --only hosting,firestore,functions",
     "deploy:hosting": "firebase deploy --only hosting",
     "deploy:functions": "firebase deploy --only functions",
     "deploy": "firebase deploy"
   }
 }
-

@@ -3,7 +3,7 @@
 ## Current (Scaffolded) Layout
 
 ```text
-windsurf-project/
+fight-club-app/
 ├── docs/
 │   ├── architecture.md
 │   ├── branding.md

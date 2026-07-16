@@ -34,7 +34,7 @@ export function MemberSelectPage() {
             onClick={() => navigate('/kiosk/confirm-checkin', { state: { member } })}
             type="button"
           >
-            {member.firstName} {member.lastName} - {member.memberNumber}
+            {member.firstName} {member.lastName}{member.nickname ? ` (${member.nickname})` : ''} - {member.memberNumber}
           </button>
         ))}
       </div>

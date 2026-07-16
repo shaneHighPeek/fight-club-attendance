@@ -31,12 +31,29 @@ function mapMember(docId: string, data: Record<string, unknown>): Member {
     memberNumber: typeof data.memberNumber === 'string' ? data.memberNumber : docId,
     firstName: typeof data.firstName === 'string' ? data.firstName : 'Unknown',
     lastName: typeof data.lastName === 'string' ? data.lastName : 'Member',
+    nickname: typeof data.nickname === 'string' ? data.nickname : undefined,
     phone: typeof data.phone === 'string' ? data.phone : '',
     email: typeof data.email === 'string' ? data.email : undefined,
+    birthDate: typeof data.birthDate === 'string' ? data.birthDate : undefined,
+    ageBand:
+      data.ageBand === 'under_8' || data.ageBand === 'youth_8_15' || data.ageBand === 'adult_16_plus'
+        ? data.ageBand
+        : undefined,
+    rankProfile:
+      typeof data.rankProfile === 'object' && data.rankProfile !== null
+        ? (data.rankProfile as Member['rankProfile'])
+        : undefined,
     status:
-      data.status === 'active' || data.status === 'inactive' || data.status === 'suspended'
+      data.status === 'active' ||
+      data.status === 'pending' ||
+      data.status === 'failed' ||
+      data.status === 'stopped' ||
+      data.status === 'temp' ||
+      data.status === 'null' ||
+      data.status === 'inactive' ||
+      data.status === 'suspended'
         ? data.status
-        : 'active',
+        : 'null',
     membershipType: typeof data.membershipType === 'string' ? data.membershipType : 'unknown',
     rank,
   };
@@ -73,8 +90,8 @@ export function MemberLookupPage() {
 
   const searchHint = useMemo(
     () => (normalizePhone(term).length >= 3
-      ? 'Searching phone, member number, first + last name...'
-      : 'Searching member number, first + last name...'),
+      ? 'Searching phone, member number, first + last name, nickname...'
+      : 'Searching member number, first + last name, nickname...'),
     [term],
   );
 
@@ -110,6 +127,18 @@ export function MemberLookupPage() {
         byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
       }
 
+      const nicknameQuery = query(
+        memberCollection,
+        orderBy('nicknameLower'),
+        startAt(inputLower),
+        endAt(`${inputLower}\uf8ff`),
+        limit(MAX_RESULTS),
+      );
+      const nicknameSnapshot = await getDocs(nicknameQuery);
+      for (const docSnap of nicknameSnapshot.docs) {
+        byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
+      }
+
       if (normalizedPhone.length >= 3) {
         const exactPhoneQuery = query(memberCollection, where('phone', '==', normalizedPhone), limit(MAX_RESULTS));
         const exactPhoneSnapshot = await getDocs(exactPhoneQuery);
@@ -118,7 +147,7 @@ export function MemberLookupPage() {
         }
 
         // Fallback for legacy formatted phone values (spaces, +, dashes) in Firestore.
-        const phoneScanQuery = query(memberCollection, orderBy('lastNameLower'), limit(PHONE_SCAN_LIMIT));
+        const phoneScanQuery = query(memberCollection, limit(PHONE_SCAN_LIMIT));
         const phoneScanSnapshot = await getDocs(phoneScanQuery);
         for (const docSnap of phoneScanSnapshot.docs) {
           const member = mapMember(docSnap.id, docSnap.data());
@@ -135,13 +164,15 @@ export function MemberLookupPage() {
         byId.set(docSnap.id, mapMember(docSnap.id, docSnap.data()));
       }
 
-      const profileScanQuery = query(memberCollection, orderBy('lastNameLower'), limit(PHONE_SCAN_LIMIT));
+      const profileScanQuery = query(memberCollection, limit(PHONE_SCAN_LIMIT));
       const profileScanSnapshot = await getDocs(profileScanQuery);
       for (const docSnap of profileScanSnapshot.docs) {
         const member = mapMember(docSnap.id, docSnap.data());
         const firstNameMatches = member.firstName.toLowerCase().includes(inputLower);
+        const lastNameMatches = member.lastName.toLowerCase().includes(inputLower);
+        const nicknameMatches = (member.nickname ?? '').toLowerCase().includes(inputLower);
         const memberNumberMatches = member.memberNumber.toUpperCase().includes(inputUpper);
-        if (memberNumberMatches || firstNameMatches) {
+        if (memberNumberMatches || firstNameMatches || lastNameMatches || nicknameMatches) {
           byId.set(docSnap.id, member);
         }
       }
@@ -181,10 +212,10 @@ export function MemberLookupPage() {
   return (
     <main className="page page-kiosk">
       <h1>Member Lookup</h1>
-      <p>Type your first name, family name, phone number, or member number to find your profile.</p>
+      <p>Type your first name, family name, nickname, phone number, or member number to find your profile.</p>
       <form className="panel" onSubmit={handleSearch}>
         <label>
-          First/last name, phone, or member number
+          First/last name, nickname, phone, or member number
           <input value={term} onChange={(event) => setTerm(event.target.value)} minLength={3} required />
         </label>
         <button className="button" type="submit" disabled={loading}>

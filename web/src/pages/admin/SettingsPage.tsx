@@ -1,8 +1,10 @@
 import { collection, getDocs, query } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 'firebase/auth';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 
+import { useAuth } from '../../auth/context';
 import { db, functions } from '../../services/firebase';
 
 type StaffRole = 'admin' | 'manager' | 'coach' | 'member';
@@ -15,16 +17,23 @@ interface StaffUserRow {
 }
 
 export function SettingsPage() {
+  const { role: authRole, user } = useAuth();
   const [staffUsers, setStaffUsers] = useState<StaffUserRow[]>([]);
   const [createEmail, setCreateEmail] = useState('');
   const [createPassword, setCreatePassword] = useState('');
   const [createDisplayName, setCreateDisplayName] = useState('');
   const [createRole, setCreateRole] = useState<StaffRole>('coach');
+  const [resetPasswordEmail, setResetPasswordEmail] = useState('');
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<StaffRole>('coach');
+  const [selectedRole, setSelectedRole] = useState<StaffRole>('coach');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [changingOwnPassword, setChangingOwnPassword] = useState(false);
   const [coachPin, setCoachPin] = useState('');
   const [adminPin, setAdminPin] = useState('');
   const [savingPins, setSavingPins] = useState(false);
@@ -73,12 +82,12 @@ export function SettingsPage() {
       const callable = httpsCallable<{ email: string; role: StaffRole }, { ok: boolean }>(functions, 'setStaffRole');
       await callable({
         email: email.trim().toLowerCase(),
-        role,
+        role: selectedRole,
       });
       setMessage('Role updated. User must refresh sign-in token (sign out/in) to apply new permissions.');
       await loadStaffUsers();
       setEmail('');
-      setRole('coach');
+      setSelectedRole('coach');
     } catch (saveError) {
       console.error(saveError);
       setError('Failed to update role. Ensure target user exists in Firebase Auth and you are admin.');
@@ -141,6 +150,56 @@ export function SettingsPage() {
       setError('Failed to save kiosk PINs. Use 4 digits for each PIN.');
     } finally {
       setSavingPins(false);
+    }
+  }
+
+  async function handleResetStaffPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setResettingPassword(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const callable = httpsCallable<{ email: string; newPassword: string }, { ok: boolean }>(
+        functions,
+        'setStaffPassword',
+      );
+      await callable({
+        email: resetPasswordEmail.trim().toLowerCase(),
+        newPassword: resetPasswordValue,
+      });
+      setMessage('Password reset applied for that user.');
+      setResetPasswordEmail('');
+      setResetPasswordValue('');
+    } catch (passwordResetError) {
+      console.error(passwordResetError);
+      setError('Failed to reset password. You must be admin, and password must be at least 6 characters.');
+    } finally {
+      setResettingPassword(false);
+    }
+  }
+
+  async function handleChangeMyPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setChangingOwnPassword(true);
+    setError(null);
+    setMessage(null);
+    try {
+      if (!user || !user.email) {
+        throw new Error('No signed-in user context.');
+      }
+
+      const credential = EmailAuthProvider.credential(user.email, currentPassword);
+      await reauthenticateWithCredential(user, credential);
+      await updatePassword(user, newPassword);
+
+      setMessage('Your password has been updated.');
+      setCurrentPassword('');
+      setNewPassword('');
+    } catch (changePasswordError) {
+      console.error(changePasswordError);
+      setError('Could not change password. Confirm your current password and try again.');
+    } finally {
+      setChangingOwnPassword(false);
     }
   }
 
@@ -212,7 +271,7 @@ export function SettingsPage() {
         </label>
         <label>
           Role
-          <select value={role} onChange={(event) => setRole(event.target.value as StaffRole)}>
+          <select value={selectedRole} onChange={(event) => setSelectedRole(event.target.value as StaffRole)}>
             <option value="coach">coach</option>
             <option value="manager">manager</option>
             <option value="admin">admin</option>
@@ -257,6 +316,65 @@ export function SettingsPage() {
           {savingPins ? 'Saving PINs...' : 'Save Kiosk PINs'}
         </button>
       </form>
+
+      <form className="panel" onSubmit={handleChangeMyPassword}>
+        <h2>Change My Password</h2>
+        <p>Update the current signed-in account password.</p>
+        <label>
+          Current password
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+            minLength={6}
+            required
+          />
+        </label>
+        <label>
+          New password
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            minLength={6}
+            required
+          />
+        </label>
+        <button className="button" type="submit" disabled={changingOwnPassword}>
+          {changingOwnPassword ? 'Updating password...' : 'Update My Password'}
+        </button>
+      </form>
+
+      {authRole === 'admin' ? (
+        <form className="panel" onSubmit={handleResetStaffPassword}>
+          <h2>Reset Staff Password</h2>
+          <p>Admin-only: set a new password for any staff account.</p>
+          <label>
+            Staff email
+            <input
+              type="email"
+              value={resetPasswordEmail}
+              onChange={(event) => setResetPasswordEmail(event.target.value)}
+              placeholder="coach@example.com"
+              required
+            />
+          </label>
+          <label>
+            New temporary password
+            <input
+              type="password"
+              value={resetPasswordValue}
+              onChange={(event) => setResetPasswordValue(event.target.value)}
+              minLength={6}
+              placeholder="Minimum 6 characters"
+              required
+            />
+          </label>
+          <button className="button" type="submit" disabled={resettingPassword}>
+            {resettingPassword ? 'Resetting...' : 'Reset Staff Password'}
+          </button>
+        </form>
+      ) : null}
 
       {error ? <p className="error">{error}</p> : null}
       {message ? <p>{message}</p> : null}

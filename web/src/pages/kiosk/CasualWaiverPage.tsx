@@ -15,8 +15,11 @@ import {
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
+import { ClassSessionSelect } from '../../components/ClassSessionSelect';
 import { MEDIA_OPTOUT_EMAIL, WAIVER_DISCLAIMER_URL, WAIVER_TEXT, WAIVER_VALIDITY_DAYS, WAIVER_VERSION } from '../../config/waiver';
+import { deriveAgeBandFromBirthDate, getDefaultRankStep, toLegacyRank, toRankProfile } from '../../config/rankSystem';
 import { db } from '../../services/firebase';
+import type { AttendanceClassSnapshot } from '../../types/classSchedule';
 import type { Member } from '../../types/member';
 
 interface WaiverState {
@@ -39,6 +42,7 @@ export function CasualWaiverPage() {
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [birthDate, setBirthDate] = useState('');
@@ -52,6 +56,7 @@ export function CasualWaiverPage() {
   const [agreeDisclaimer, setAgreeDisclaimer] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedClass, setSelectedClass] = useState<AttendanceClassSnapshot | null>(null);
 
   useEffect(() => {
     async function hydrateMemberDefaults() {
@@ -61,6 +66,7 @@ export function CasualWaiverPage() {
 
       setFirstName(member.firstName);
       setLastName(member.lastName);
+      setNickname(member.nickname ?? '');
       setPhone(member.phone);
       if (member.email) {
         setEmail(member.email);
@@ -75,6 +81,7 @@ export function CasualWaiverPage() {
         const data = snapshot.data() as Record<string, unknown>;
         const freshFirstName = typeof data.firstName === 'string' ? data.firstName : member.firstName;
         const freshLastName = typeof data.lastName === 'string' ? data.lastName : member.lastName;
+        const freshNickname = typeof data.nickname === 'string' ? data.nickname : (member.nickname ?? '');
         const freshPhone = typeof data.phone === 'string' ? data.phone : member.phone;
         const freshEmail =
           typeof data.email === 'string'
@@ -83,6 +90,7 @@ export function CasualWaiverPage() {
 
         setFirstName(freshFirstName);
         setLastName(freshLastName);
+        setNickname(freshNickname);
         setPhone(freshPhone);
         if (freshEmail) {
           setEmail(freshEmail);
@@ -187,6 +195,11 @@ export function CasualWaiverPage() {
       const expiresAt = Timestamp.fromDate(new Date(now + WAIVER_VALIDITY_DAYS * 24 * 60 * 60 * 1000));
       const normalizedPhone = normalizePhone(phone);
       const normalizedEmail = email.trim().toLowerCase();
+      const normalizedNickname = nickname.trim();
+      const computedAgeBand = deriveAgeBandFromBirthDate(birthDate.trim() || member?.birthDate);
+      const defaultStep = getDefaultRankStep(computedAgeBand);
+      const defaultRankProfile = toRankProfile(defaultStep);
+      const defaultLegacyRank = toLegacyRank(defaultRankProfile);
       let memberIdForWaiver: string | null = mode === 'member-waiver' ? member?.id ?? null : null;
 
       if (mode === 'casual') {
@@ -205,9 +218,15 @@ export function CasualWaiverPage() {
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             lastNameLower: lastName.trim().toLowerCase(),
+            nickname: normalizedNickname || null,
+            nicknameLower: normalizedNickname ? normalizedNickname.toLowerCase() : null,
             email: normalizedEmail,
             phone: normalizedPhone,
+            birthDate: birthDate.trim() || null,
+            ageBand: computedAgeBand,
+            rankProfile: defaultRankProfile,
             membershipType: 'temp',
+            rank: defaultLegacyRank,
             updatedAt: serverTimestamp(),
           });
         } else {
@@ -217,14 +236,16 @@ export function CasualWaiverPage() {
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             lastNameLower: lastName.trim().toLowerCase(),
+            nickname: normalizedNickname || null,
+            nicknameLower: normalizedNickname ? normalizedNickname.toLowerCase() : null,
             phone: normalizedPhone,
             email: normalizedEmail,
+            birthDate: birthDate.trim(),
+            ageBand: computedAgeBand,
             status: 'active',
             membershipType: 'temp',
-            rank: {
-              belt: 'white',
-              stripes: 1,
-            },
+            rankProfile: defaultRankProfile,
+            rank: defaultLegacyRank,
             totalCheckIns: 0,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -293,6 +314,7 @@ export function CasualWaiverPage() {
         status: 'completed',
         locationId: 'ashmore',
         checkInTime: serverTimestamp(),
+        classSession: selectedClass,
         createdAt: serverTimestamp(),
         casualProfile: {
           firstName: firstName.trim(),
@@ -348,6 +370,12 @@ export function CasualWaiverPage() {
           Last name
           <input value={lastName} onChange={(event) => setLastName(event.target.value)} required />
         </label>
+        {mode === 'casual' ? (
+          <label>
+            Nickname (optional)
+            <input value={nickname} onChange={(event) => setNickname(event.target.value)} />
+          </label>
+        ) : null}
         <label>
           Email
           <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
@@ -433,6 +461,7 @@ export function CasualWaiverPage() {
             : 'I agree to the waiver and safety disclaimer.'}
         </label>
       </div>
+      {mode === 'casual' ? <ClassSessionSelect onSelectionChange={setSelectedClass} /> : null}
       <div className="actions">
         <button className="button" type="button" onClick={() => void handleSubmit()} disabled={saving}>
           {saving ? 'Submitting...' : mode === 'member-waiver' ? 'Submit Waiver Renewal' : 'Submit Waiver'}
