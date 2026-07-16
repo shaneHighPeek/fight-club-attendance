@@ -16,6 +16,8 @@ const EMPTY_SESSION: Omit<ClassSession, 'id'> = {
   active: true,
 };
 
+const CUSTOM_REPLACEMENT_VALUE = '__custom__';
+
 function newId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -37,6 +39,7 @@ export function ClassSchedulePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [replacementSessionId, setReplacementSessionId] = useState('');
+  const [replacementChoice, setReplacementChoice] = useState('');
   const [replacementName, setReplacementName] = useState('');
   const [replacementReason, setReplacementReason] = useState('');
   const [adHocName, setAdHocName] = useState('');
@@ -133,6 +136,7 @@ export function ClassSchedulePage() {
         updatedAt: serverTimestamp(),
       }, { merge: true });
       setReplacementSessionId('');
+      setReplacementChoice('');
       setReplacementName('');
       setReplacementReason('');
       setMessage('Today’s substitution is now active on the kiosk.');
@@ -215,7 +219,8 @@ export function ClassSchedulePage() {
           <select value={replacementSessionId} onChange={(event) => {
             const id = event.target.value;
             setReplacementSessionId(id);
-            setReplacementName(todaySessions.find((session) => session.id === id)?.name ?? '');
+            setReplacementChoice('');
+            setReplacementName('');
           }}>
             <option value="">Select today’s class</option>
             {todaySessions.map((session) => <option key={session.id} value={session.id}>{session.startTime} — {session.name}</option>)}
@@ -223,8 +228,22 @@ export function ClassSchedulePage() {
         </label>
         <label>
           Replacement class
-          <input list="class-name-options" value={replacementName} onChange={(event) => setReplacementName(event.target.value)} placeholder="e.g. Open Mat (All Levels)" />
+          <select value={replacementChoice} onChange={(event) => {
+            const choice = event.target.value;
+            setReplacementChoice(choice);
+            setReplacementName(choice === CUSTOM_REPLACEMENT_VALUE ? '' : choice);
+          }}>
+            <option value="">Select replacement class</option>
+            {classNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            <option value={CUSTOM_REPLACEMENT_VALUE}>Custom class…</option>
+          </select>
         </label>
+        {replacementChoice === CUSTOM_REPLACEMENT_VALUE ? (
+          <label>
+            Custom class name
+            <input value={replacementName} onChange={(event) => setReplacementName(event.target.value)} placeholder="Enter replacement class name" />
+          </label>
+        ) : null}
         <label>
           Reason (optional)
           <input value={replacementReason} onChange={(event) => setReplacementReason(event.target.value)} placeholder="e.g. Instructor unavailable" />
