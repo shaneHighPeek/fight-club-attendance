@@ -88,11 +88,14 @@ service cloud.firestore {
     }
 
     function isStaffRankUpdate() {
-      return isSignedIn() &&
+      return (isAdmin() || isBootstrapAdmin() || isManager()) &&
       request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         "rank",
         "rankProfile",
         "ageBand",
+        "nickname",
+        "nicknameLower",
+        "status",
         "updatedAt"
       ]) &&
       request.resource.data.rank is map &&
@@ -101,6 +104,20 @@ service cloud.firestore {
       request.resource.data.rank.stripes >= 0 &&
       request.resource.data.rank.stripes <= 10 &&
       request.resource.data.updatedAt is timestamp &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["nickname"]) ||
+        request.resource.data.nickname == null ||
+        request.resource.data.nickname is string
+      ) &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["nicknameLower"]) ||
+        request.resource.data.nicknameLower == null ||
+        request.resource.data.nicknameLower is string
+      ) &&
+      (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(["status"]) ||
+        request.resource.data.status is string
+      ) &&
       (
         !request.resource.data.diff(resource.data).affectedKeys().hasAny(["ageBand"]) ||
         request.resource.data.ageBand is string

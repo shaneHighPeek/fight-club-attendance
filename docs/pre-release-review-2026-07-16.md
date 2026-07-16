@@ -62,6 +62,9 @@ Legacy attendance records without class data remain supported and produce `null`
 - Functions TypeScript build: required before deployment.
 - Git whitespace/diff check: required before deployment.
 - Local Firebase emulator walkthrough: completed for class-schedule layout by the user.
+- Automated local emulator verification: nickname prefix query, manager nickname/status permissions,
+  protected-field rejection, forgot-password request, signed-in password change, and admin password
+  reset callable all passed.
 
 ## Deployment scope
 

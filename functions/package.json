@@ -11,6 +11,7 @@
     "lint": "eslint --ext .ts src",
     "backfill:nickname-lower": "npm run build && node lib/backfillNicknameLower.js",
     "backfill:nickname-lower:apply": "npm run build && node lib/backfillNicknameLower.js --apply",
+    "verify:local-member-auth": "npm run build && FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 node lib/verifyLocalMemberAuth.js",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell"
   },
