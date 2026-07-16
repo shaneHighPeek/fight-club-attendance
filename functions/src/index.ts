@@ -143,6 +143,29 @@ function toIsoDate(value: unknown): string {
   return new Date().toISOString();
 }
 
+function formatClassTimeRange(startTime: unknown, endTime: unknown): string {
+  const formatTime = (value: unknown): string => {
+    if (typeof value !== "string") {
+      return "";
+    }
+
+    const match = /^(\d{2}):(\d{2})$/.exec(value);
+    if (!match) {
+      return value;
+    }
+
+    const hour = Number(match[1]);
+    const minute = match[2];
+    const period = hour >= 12 ? "pm" : "am";
+    const displayHour = hour % 12 || 12;
+    return `${displayHour}:${minute} ${period}`;
+  };
+
+  const start = formatTime(startTime);
+  const end = formatTime(endTime);
+  return start && end ? `${start}–${end}` : start || end;
+}
+
 function toE164Phone(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -872,6 +895,13 @@ export const syncAttendanceToGoogleSheet = onDocumentCreated(
       const stripes = typeof rankAtCheckIn.stripes === "number" ? rankAtCheckIn.stripes : "";
       const attendanceLevel = typeof logData.attendanceLevel === "number" ? logData.attendanceLevel : "";
       const checkInIso = toIsoDate(logData.checkInTime);
+      const classSession =
+        typeof logData.classSession === "object" && logData.classSession !== null
+          ? (logData.classSession as Record<string, unknown>)
+          : {};
+      const classTime = formatClassTimeRange(classSession.startTime, classSession.endTime);
+      const className =
+        typeof classSession.actualClassName === "string" ? classSession.actualClassName : "";
 
       const auth = new google.auth.GoogleAuth({
         scopes: ["https://www.googleapis.com/auth/spreadsheets"]
@@ -883,10 +913,19 @@ export const syncAttendanceToGoogleSheet = onDocumentCreated(
 
       await sheetsClient.spreadsheets.values.append({
         spreadsheetId,
-        range: `${sheetTabName}!A:F`,
+        range: `${sheetTabName}!A:H`,
         valueInputOption: "USER_ENTERED",
         requestBody: {
-          values: [[fullName, checkInIso, membershipType, belt, String(stripes), String(attendanceLevel)]]
+          values: [[
+            fullName,
+            checkInIso,
+            membershipType,
+            belt,
+            String(stripes),
+            String(attendanceLevel),
+            classTime,
+            className
+          ]]
         }
       });
 

@@ -72,7 +72,7 @@ Attendance logs can be mirrored into Google Sheets through the Cloud Function
 
 Each new attendance log appends one row:
 
-- `Name | Date | membershipType | belt stripes | attendanceLevel`
+- `Name | Date | membershipType | belt | stripes | attendanceLevel | class time | class name`
 
 ## Waiver Versioning (Legal Updates)
 
